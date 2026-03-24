@@ -84,8 +84,14 @@ Installation & Launch
   Open http://localhost:3000 in your web browser
 
 Simple startup
-    Run 'start_dashboard.bat' # Windows
-    Run 'start_dashbaord.command' # MacOS
+    Run Windows 
+    ```
+    'start_dashboard.bat' # Windows
+    ```
+    Run MacOS
+    ```
+    'start_dashbaord.command'
+    ```
 
 ## 5. License & Attribution
 

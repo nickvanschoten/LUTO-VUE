@@ -63,7 +63,7 @@ LUTO-VUE/
 ├── store/                  # Zustand global state management
 │   └── useDashboardStore.ts
 ├── data/                   # (Ignored in source control)
-│   └── map_layers/         # Compiled JS spatial payloads from LUTO Python model
+│   └── map_layers/         # Compiled JS spatial payloads from LUTO2 model
 └── public/                 # Static assets
 ```
 ## 4. Local Development & Deployment

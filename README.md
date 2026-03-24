@@ -74,9 +74,7 @@ Prerequisites
     LUTO 2.0 Python model outputs. Ensure the compiled JavaScript data dictionaries are placed in a data/map_layers/ directory located one level above the Next.js project root, or update the MAP_LAYERS_DIR path in route.ts to match your local environment.
 
 Installation & Launch
-
-  Clone the repository:
-    
+   
     Bash
     ```
     git clone [https://github.com/](https://github.com/)[Organization]/LUTO-VUE.git # Clone the repository

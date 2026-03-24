@@ -76,22 +76,22 @@ Prerequisites
 Installation & Launch
    
     Bash
-    ```
+    
     git clone [https://github.com/](https://github.com/)[Organization]/LUTO-VUE.git # Clone the repository
     npm install # install dependencies
     npm run dev # start the development server
-    ```
+    
   Open http://localhost:3000 in your web browser
   
 **Simple startup**
 Run Windows 
-    ```text
+    
     'start_dashboard.bat'
-    ```
+    
 Run MacOS
-    ```text
+    
     'start_dashbaord.command'
-    ```
+    
 
 ## 5. License & Attribution
 

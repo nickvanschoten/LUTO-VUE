@@ -84,12 +84,12 @@ Installation & Launch
   Open http://localhost:3000 in your web browser
   
 **Simple startup**
-    Run Windows 
+Run Windows 
+    ```text
+    'start_dashboard.bat'
     ```
-    'start_dashboard.bat' # Windows
-    ```
-    Run MacOS
-    ```
+Run MacOS
+    ```text
     'start_dashbaord.command'
     ```
 

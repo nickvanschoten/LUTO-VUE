@@ -81,7 +81,11 @@ Installation & Launch
     npm install # install dependencies
     npm run dev # start the development server
     ```
-  Open http://localhost:3000 in your web browser.
+  Open http://localhost:3000 in your web browser
+
+Simple startup
+    Run 'start_dashboard.bat' # Windows
+    Run 'start_dashbaord.command' # MacOS
 
 ## 5. License & Attribution
 

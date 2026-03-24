@@ -1,6 +1,6 @@
 # LUTO-VUE
 
-**Land Use Trade-Offs (LUTO) 2.0 Digital Twin & Scenario Explorer**
+**Land Use Trade-Offs (LUTO) 2.0 Scenario Explorer**
 
 LUTO-VUE is an interactive, web-based dashboard engineered to visualize and analyze multidimensional outputs from the Land Use Trade-Offs (LUTO) 2.0 model. Designed for researchers and policymakers, the application translates massive spatial and time-series datasets into actionable insights regarding the environmental, economic, and social impacts of Australian land-use scenarios. 
 

@@ -66,7 +66,7 @@ LUTO-VUE/
 │   └── map_layers/         # Compiled JS spatial payloads from LUTO Python model
 └── public/                 # Static assets
 ```
-4. Local Development & Deployment
+## 4. Local Development & Deployment
 Prerequisites
 
     Node.js (v18.x or higher recommended)
@@ -85,7 +85,7 @@ Installation & Launch
     ```
   Open http://localhost:3000 in your web browser.
 
-5. License & Attribution
+## 5. License & Attribution
 
 LUTO-VUE is a visualisation interface for the Land Use Trade-Offs v2 ([LUTO2]([url](https://github.com/land-use-trade-offs/luto-2.0))) modelling system. Developed in collaboration with Climateworks Centre and Deakin University. Please refer to the parent LUTO 2.0 repository for underlying model documentation and licensing details.
   

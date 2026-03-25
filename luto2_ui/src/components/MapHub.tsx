@@ -1,0 +1,507 @@
+"use client";
+
+import React, { useEffect, useState, useMemo } from 'react';
+import DeckGL from '@deck.gl/react';
+import { GeoJsonLayer } from '@deck.gl/layers';
+import { BitmapLayer } from '@deck.gl/layers';
+import { Map as MapGL } from 'react-map-gl/maplibre';
+import 'maplibre-gl/dist/maplibre-gl.css';
+import useDashboardStore from '@/store/useDashboardStore';
+
+const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
+const INITIAL_VIEW_STATE = { longitude: 133.7751, latitude: -25.2744, zoom: 4.5, pitch: 0, bearing: 0 };
+
+// Fallback bounds in DeckGL format [minLon, minLat, maxLon, maxLat]
+const AUSTRALIA_BOUNDS: [number, number, number, number] = [112.925, -43.665, 153.625, -10.015];
+
+interface Props {
+    geoData?: any;
+    analyticalData: any[];
+    primaryMetric: string;
+    selectedSubCategory?: string;
+    selectedYear?: number;
+    showBaseMap?: boolean;
+    showDataPoints?: boolean;
+    showChoropleth?: boolean;
+    choroplethMode?: 'total' | 'density';
+    selectedAgManagement?: string;
+}
+
+// Compact number formatter for the legend
+function fmtNum(n: number): string {
+    const abs = Math.abs(n);
+    if (abs >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+    if (abs >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (abs >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+    return n.toFixed(1);
+}
+
+const MapHub = ({
+    geoData,
+    analyticalData = [],
+    primaryMetric = '',
+    selectedSubCategory = 'ALL',
+    selectedYear = 2050,
+    showBaseMap = false,
+    showDataPoints = false,
+    showChoropleth = true,
+    choroplethMode = 'total',
+    selectedAgManagement = 'ALL',
+}: Props) => {
+    const { selectedRegionIds, setSelectedRegionIds, areaDict } = useDashboardStore();
+
+    // Raster overlay states
+    const [rasterBaseImgStr, setRasterBaseImgStr] = useState<string | null>(null);
+    const [rasterBaseBounds, setRasterBaseBounds] = useState<[number, number, number, number]>(AUSTRALIA_BOUNDS);
+    const [rasterBaseOverlayUrl, setRasterBaseOverlayUrl] = useState<string | null>(null);
+
+    const [rasterDataImgStr, setRasterDataImgStr] = useState<string | null>(null);
+    const [rasterDataBounds, setRasterDataBounds] = useState<[number, number, number, number]>(AUSTRALIA_BOUNDS);
+    const [rasterDataOverlayUrl, setRasterDataOverlayUrl] = useState<string | null>(null);
+
+    // ── Base Raster Fetch ───────────────────────────
+    useEffect(() => {
+        if (!primaryMetric || !showBaseMap) return;
+        let cancelled = false;
+
+        const fetchBaseRaster = async () => {
+            try {
+                const params = new URLSearchParams({
+                    metric: primaryMetric,
+                    subCat: 'ALL',
+                    year: String(selectedYear),
+                });
+                const res = await fetch(`/api/map-layer?${params.toString()}`);
+                if (!res.ok) {
+                    if (!cancelled) setRasterBaseImgStr(null);
+                    return;
+                }
+                let json;
+                try {
+                    const text = await res.text();
+                    json = JSON.parse(text);
+                } catch (parseError) {
+                    console.warn('Raster Base JSON Parse Error:', parseError);
+                    if (!cancelled) setRasterBaseImgStr(null);
+                    return;
+                }
+                if (cancelled) return;
+
+                // Fix the Base64 String for Base Map
+                if (json.empty || !json.img_str) {
+                    setRasterBaseImgStr(null);
+                } else {
+                    const prefix = 'data:image/png;base64,';
+                    const finalImgStr = json.img_str.startsWith('data:')
+                        ? json.img_str
+                        : prefix + json.img_str;
+                    setRasterBaseImgStr(finalImgStr);
+                }
+
+                if (json.bounds && Array.isArray(json.bounds) && json.bounds.length === 2) {
+                    const [[lat0, lon0], [lat1, lon1]] = json.bounds;
+                    setRasterBaseBounds([lon0, lat0, lon1, lat1]);
+                }
+            } catch (e) {
+                if (!cancelled) setRasterBaseImgStr(null);
+            }
+        };
+
+        fetchBaseRaster();
+        return () => { cancelled = true; };
+    }, [primaryMetric, selectedYear, showBaseMap]);
+
+    // ── Data Points Raster Fetch ───────────────────────────
+    useEffect(() => {
+        if (!primaryMetric || !showDataPoints || selectedSubCategory === 'ALL') return;
+        let cancelled = false;
+
+        const fetchDataRaster = async () => {
+            try {
+                // 1. Determine if the user selected an Infrastructure class as the PRIMARY category
+                const isInfrastructureMain = [
+                    'Onshore Wind', 'Utility Solar PV',
+                    'Human-induced regeneration (Beef)', 'Human-induced regeneration (Sheep)',
+                    'Savanna Burning'
+                ].includes(selectedSubCategory);
+
+                // 2. Set the Parent Category. If Infrastructure is main, the Parent must be ALL.
+                const finalParentCat = isInfrastructureMain ? 'ALL' : selectedSubCategory;
+
+                // 3. Set the Sub-Category (Ag Management).
+                let finalSubCat = 'ALL';
+                if (isInfrastructureMain) {
+                    finalSubCat = selectedSubCategory; // They want the global infrastructure map
+                } else if (selectedAgManagement && selectedAgManagement !== 'ALL') {
+                    finalSubCat = selectedAgManagement; // They want the specific intersection
+                }
+
+                const params = new URLSearchParams({
+                    metric: primaryMetric,
+                    parentCat: finalParentCat,
+                    subCat: finalSubCat,
+                    year: String(selectedYear),
+                });
+
+                const url = `/api/map-layer?${params.toString()}`;
+                console.log("Fetching Raster (Deep Traversal):", url);
+
+                const res = await fetch(url);
+                if (!res.ok) {
+                    if (!cancelled) setRasterDataImgStr(null);
+                    return;
+                }
+
+                let json;
+                try {
+                    const text = await res.text();
+                    json = JSON.parse(text);
+                } catch (parseError) {
+                    console.warn('Raster Data JSON Parse Error:', parseError);
+                    if (!cancelled) setRasterDataImgStr(null);
+                    return;
+                }
+
+                if (cancelled) return;
+
+                // Fix the Base64 String for Image Source
+                if (json.empty || !json.img_str) {
+                    setRasterDataImgStr(null);
+                } else {
+                    const prefix = 'data:image/png;base64,';
+                    const finalImgStr = json.img_str.startsWith('data:')
+                        ? json.img_str
+                        : prefix + json.img_str;
+                    setRasterDataImgStr(finalImgStr);
+                }
+
+                if (json.bounds && Array.isArray(json.bounds) && json.bounds.length === 2) {
+                    const [[lat0, lon0], [lat1, lon1]] = json.bounds;
+                    setRasterDataBounds([lon0, lat0, lon1, lat1]);
+                }
+            } catch (e: any) {
+                console.warn(`Raster Fetch Failed for [${selectedSubCategory}]:`, e);
+                if (!cancelled) setRasterDataImgStr(null);
+            }
+        };
+
+        fetchDataRaster();
+        return () => { cancelled = true; };
+    }, [primaryMetric, selectedSubCategory, selectedYear, showDataPoints, selectedAgManagement]);
+
+    // Clear rasters when toggled off
+    useEffect(() => {
+        if (!showBaseMap) setRasterBaseImgStr(null);
+    }, [showBaseMap]);
+
+    useEffect(() => {
+        if (!showDataPoints || selectedSubCategory === 'ALL') setRasterDataImgStr(null);
+    }, [showDataPoints, selectedSubCategory]);
+
+    // Canvas Generators
+    useEffect(() => {
+        if (!rasterBaseImgStr) {
+            setRasterBaseOverlayUrl(null);
+            return;
+        }
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                ctx.drawImage(img, 0, 0);
+                setRasterBaseOverlayUrl(canvas.toDataURL());
+            }
+        };
+        img.onerror = (err) => {
+            console.error("Canvas failed to load Base Raster Base64 Image:", err);
+        };
+        img.src = rasterBaseImgStr;
+    }, [rasterBaseImgStr]);
+
+    useEffect(() => {
+        if (!rasterDataImgStr) {
+            setRasterDataOverlayUrl(null);
+            return;
+        }
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                ctx.drawImage(img, 0, 0);
+                setRasterDataOverlayUrl(canvas.toDataURL());
+            }
+        };
+        img.onerror = (err) => {
+            console.error("Canvas failed to load Data Raster Base64 Image:", err);
+        };
+        img.src = rasterDataImgStr;
+    }, [rasterDataImgStr]);
+
+    // ── Choropleth data dictionary ─────────────────────────────────────────
+    const { dataDict, minVal, maxVal } = useMemo(() => {
+        if (!analyticalData || analyticalData.length === 0 || !primaryMetric) {
+            return { dataDict: {} as Record<string, number>, minVal: 0, maxVal: 1 };
+        }
+
+        const dict: Record<string, number> = {};
+        let min = Infinity;
+        let max = -Infinity;
+        const blob = Array.isArray(analyticalData) ? analyticalData[0] : analyticalData;
+        if (!blob) return { dataDict: dict, minVal: 0, maxVal: 1 };
+
+        // Defensive iteration: handle both array-of-region-objects and object keyed by region name
+        const regionEntries: Array<{ name: string; data: any }> = [];
+        if (Array.isArray(blob)) {
+            blob.forEach((item: any) => {
+                const name = typeof item === 'string' ? item
+                    : (item.region || item.NRM_REGION || item.name || null);
+                if (name) regionEntries.push({ name, data: item });
+            });
+        } else {
+            Object.keys(blob).forEach(key => {
+                regionEntries.push({ name: key, data: blob[key] });
+            });
+        }
+
+        regionEntries.forEach(({ name: region, data: regionData }) => {
+            if (region === 'AUSTRALIA') return;
+
+            let rawSeries: any[] = [];
+
+            if (Array.isArray(regionData)) {
+                rawSeries = regionData;
+            } else if (regionData && typeof regionData === 'object') {
+                rawSeries = (regionData as any)['ALL'] || (regionData as any)[Object.keys(regionData)[0]] || [];
+            }
+            if (!Array.isArray(rawSeries) || rawSeries.length === 0) return;
+
+            // Case-insensitive match to bridge UI strings to Python backend strings
+            const targetFilter = (selectedAgManagement && selectedAgManagement !== 'ALL')
+                ? selectedAgManagement
+                : selectedSubCategory;
+
+            // Case-insensitive match to bridge UI strings to Python backend strings
+            const targetSeries = (targetFilter && targetFilter !== 'ALL')
+                ? rawSeries.find((s: any) => s.name && s.name.toLowerCase() === targetFilter.toLowerCase())
+                : rawSeries[0];
+
+            if (targetSeries && Array.isArray(targetSeries.data)) {
+                // Data is [year, value] tuples — find the exact year
+                const dataPoint = targetSeries.data.find((p: any) => p[0] === selectedYear);
+                let val = dataPoint ? Number(dataPoint[1]) : NaN;
+
+                if (!isNaN(val)) {
+                    // Normalise key for case-insensitive GeoJSON matching
+                    const safeRegion = region.trim().toLowerCase();
+
+                    let finalVal = val;
+                    if (choroplethMode === 'density') {
+                        const area = areaDict[safeRegion] || 1;
+                        if (area === 1) console.warn(`GeoJSON missing area property for density calculation: ${safeRegion}`);
+                        finalVal = val / area;
+                    }
+
+                    dict[safeRegion] = finalVal;
+                    if (finalVal < min) min = finalVal;
+                    if (finalVal > max) max = finalVal;
+                }
+            }
+        });
+
+        return {
+            dataDict: dict,
+            minVal: min === Infinity ? 0 : min,
+            maxVal: max === -Infinity ? 1 : max,
+        };
+    }, [analyticalData, primaryMetric, selectedSubCategory, selectedYear, choroplethMode, areaDict]);
+
+    const hasData = Object.keys(dataDict).length > 0;
+
+    // ── Build layers ───────────────────────────────────────────────────────
+    const layers = useMemo(() => {
+        const result: any[] = [];
+
+        // 1. BitmapLayer Base Map (BELOW — first in array), only when toggle is on
+        if (showBaseMap && rasterBaseOverlayUrl) {
+            result.push(new BitmapLayer({
+                id: 'raster-overlay-base',
+                bounds: rasterBaseBounds,
+                image: rasterBaseOverlayUrl,
+                opacity: 0.6,
+                updateTriggers: {
+                    image: [showBaseMap, primaryMetric, selectedYear],
+                    bounds: [primaryMetric, selectedYear]
+                }
+            }));
+        }
+
+        // 1.5 BitmapLayer Data Points
+        if (showDataPoints && rasterDataOverlayUrl) {
+            result.push(new BitmapLayer({
+                id: 'raster-overlay-data',
+                bounds: rasterDataBounds,
+                image: rasterDataOverlayUrl,
+                opacity: 0.8,
+                updateTriggers: {
+                    image: [showDataPoints, primaryMetric, selectedSubCategory, selectedYear],
+                    bounds: [primaryMetric, selectedSubCategory, selectedYear]
+                }
+            }));
+        }
+
+        // 2. GeoJsonLayer (on top)
+        if (geoData && showChoropleth) {
+            result.push(new GeoJsonLayer({
+                id: 'nrm-regions-layer',
+                data: geoData,
+                pickable: true,
+                stroked: true,
+                filled: true,
+                lineWidthMinPixels: 1.5,
+                getFillColor: (f: any) => {
+                    const regionName = f.properties.NRM_REGION?.trim().toLowerCase();
+                    const val = dataDict[regionName];
+
+                    if (val === undefined) return [50, 50, 50, 60];
+
+                    const blob = Array.isArray(analyticalData) ? analyticalData[0] : analyticalData;
+                    const exactDataKey = blob ? (Object.keys(blob).find(k => k.toLowerCase() === regionName) || f.properties.NRM_REGION) : f.properties.NRM_REGION;
+
+                    if (selectedRegionIds.includes(exactDataKey)) return [0, 226, 97, 200];
+
+                    const absPeak = Math.max(Math.abs(minVal), Math.abs(maxVal)) || 1;
+                    const ratio = Math.abs(val) / absPeak;
+                    const intensity = Math.floor(ratio * 200);
+
+                    return val < 0
+                        ? [255, 255 - intensity, 255 - intensity, 120]
+                        : [255 - intensity, 255, 255 - intensity, 120];
+                },
+                getLineColor: (f: any) => {
+                    const clickedRegion = f.properties.NRM_REGION?.trim().toLowerCase();
+                    const blob = Array.isArray(analyticalData) ? analyticalData[0] : analyticalData;
+                    const exactDataKey = blob ? (Object.keys(blob).find(k => k.toLowerCase() === clickedRegion) || f.properties.NRM_REGION) : f.properties.NRM_REGION;
+
+                    return selectedRegionIds.includes(exactDataKey) ? [0, 255, 255, 255] : [255, 255, 255, 60];
+                },
+                getLineWidth: (f: any) => {
+                    const clickedRegion = f.properties.NRM_REGION?.trim().toLowerCase();
+                    const blob = Array.isArray(analyticalData) ? analyticalData[0] : analyticalData;
+                    const exactDataKey = blob ? (Object.keys(blob).find(k => k.toLowerCase() === clickedRegion) || f.properties.NRM_REGION) : f.properties.NRM_REGION;
+
+                    return selectedRegionIds.includes(exactDataKey) ? 3000 : 500;
+                },
+                onClick: (info: any, event: any) => {
+                    if (info.object) {
+                        const region = info.object.properties.NRM_REGION?.trim().toLowerCase();
+                        if (!region) return;
+
+                        // Find the exact matching key from the analytical data blob (Title Case)
+                        const blob = Array.isArray(analyticalData) ? analyticalData[0] : analyticalData;
+                        const exactDataKey = blob ? (Object.keys(blob).find(k => k.toLowerCase() === region) || info.object.properties.NRM_REGION) : info.object.properties.NRM_REGION;
+
+                        const isMulti = event.srcEvent.ctrlKey || event.srcEvent.metaKey;
+                        if (isMulti) {
+                            const newSelection = selectedRegionIds.includes(exactDataKey)
+                                ? selectedRegionIds.filter(id => id !== exactDataKey)
+                                : [...selectedRegionIds, exactDataKey];
+                            setSelectedRegionIds(newSelection);
+                        } else {
+                            setSelectedRegionIds([exactDataKey]);
+                        }
+                    } else {
+                        setSelectedRegionIds([]);
+                    }
+                },
+                updateTriggers: {
+                    getFillColor: [dataDict, selectedRegionIds, choroplethMode, areaDict],
+                    getLineColor: [selectedRegionIds],
+                }
+            }));
+        }
+
+        return result;
+    }, [geoData, showChoropleth, showBaseMap, rasterBaseOverlayUrl, rasterBaseBounds, showDataPoints, rasterDataOverlayUrl, rasterDataBounds, dataDict, minVal, maxVal, selectedRegionIds, setSelectedRegionIds]);
+
+    return (
+        <div className="relative w-full h-full min-h-0 bg-slate-900 border-none overflow-hidden">
+
+            {/* Choropleth Legend */}
+            {hasData && (
+                <div className="absolute bottom-4 left-4 z-10 pointer-events-none bg-slate-900/80 backdrop-blur-sm rounded-lg p-3 min-w-[160px]">
+                    <p className="text-[9px] font-bold uppercase tracking-widest text-slate-400 mb-2">
+                        {primaryMetric} {choroplethMode === 'density' ? '(Density)' : ''} — {selectedYear}
+                    </p>
+                    <div
+                        className="w-full h-2.5 rounded-full mb-1.5"
+                        style={{ background: 'linear-gradient(to right, rgb(255,80,80), rgb(80,80,80), rgb(80,255,80))' }}
+                    />
+                    <div className="flex justify-between text-[9px] font-bold text-slate-300">
+                        <span>{fmtNum(minVal)}</span>
+                        <span className="text-slate-500">0</span>
+                        <span>{fmtNum(maxVal)}</span>
+                    </div>
+                </div>
+            )}
+
+            {/* Raster Legend — only when high-res overlay is active */}
+            {(showBaseMap || showDataPoints) && (rasterBaseImgStr || rasterDataImgStr) && (
+                <div className="absolute bottom-24 left-4 z-10 pointer-events-none bg-slate-900/80 backdrop-blur-sm rounded-lg p-3 min-w-[160px]">
+                    <p className="text-[9px] font-bold uppercase tracking-widest text-[#00E261] mb-2">
+                        {showDataPoints && showBaseMap ? 'Base Map & Point Data' : showDataPoints ? 'High-Res Point Data' : 'High-Res Base Map'}
+                    </p>
+                    <div className="space-y-1">
+                        {[
+                            { label: 'Dryland Cropping', color: '#f59e0b' },
+                            { label: 'Irrigated Cropping', color: '#3b82f6' },
+                            { label: 'Grazing (Ag)', color: '#84cc16' },
+                            { label: 'Agroforestry / Am', color: '#a855f7' },
+                            { label: 'Environmental / NonAg', color: '#22c55e' },
+                            { label: 'No Data', color: '#475569' },
+                        ].map(entry => (
+                            <div key={entry.label} className="flex items-center gap-2">
+                                <div className="w-3 h-3 rounded-sm flex-shrink-0" style={{ backgroundColor: entry.color }} />
+                                <span className="text-[9px] text-slate-300 leading-tight">{entry.label}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            <DeckGL
+                initialViewState={INITIAL_VIEW_STATE}
+                controller={true}
+                layers={layers}
+                getTooltip={({ object }: any) => {
+                    if (!object?.properties) return null;
+                    const rawName = object.properties.NRM_REGION;
+                    const regionName = rawName ? rawName.trim().toLowerCase() : '';
+                    const val = dataDict[regionName];
+                    if (val === undefined) {
+                        return `NRM Region: "${rawName}"\nStatus: Not found in analytical data keys.`;
+                    }
+
+                    const area = areaDict[regionName];
+                    const displayArea = area ? `${area.toFixed(0)} km²` : 'Unknown Area';
+
+                    const formattedVal = Math.abs(val) >= 1e6
+                        ? (val / 1e6).toFixed(2) + 'M'
+                        : Math.abs(val) >= 1e3
+                            ? (val / 1e3).toFixed(2) + 'k'
+                            : val.toFixed(2);
+                    return `${rawName}\nValue: ${formattedVal} ${choroplethMode === 'density' ? '/ km²' : ''}\nArea: ${displayArea}`.trim();
+                }}
+            >
+                <MapGL mapStyle={MAP_STYLE} reuseMaps />
+            </DeckGL>
+        </div>
+    );
+};
+
+export default React.memo(MapHub);

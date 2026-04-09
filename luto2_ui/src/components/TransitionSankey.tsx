@@ -14,10 +14,11 @@ interface Props {
     targetRegions: string[];
     selectedYear: number;
     selectedSubCategory: string;
+    baseYear: number;
     title?: string;
 }
 
-const TransitionSankey = ({ analyticalData, targetRegions, selectedYear, selectedSubCategory, title }: Props) => {
+const TransitionSankey = ({ analyticalData, targetRegions, selectedYear, selectedSubCategory, baseYear, title }: Props) => {
     const chartData = useMemo(() => {
         if (!analyticalData || analyticalData.length === 0 || !targetRegions || targetRegions.length === 0) return [];
         try {
@@ -40,10 +41,10 @@ const TransitionSankey = ({ analyticalData, targetRegions, selectedYear, selecte
                 rawSeries.forEach(s => {
                     if (!s || !Array.isArray(s.data) || s.data.length === 0) return;
 
-                    const p2020 = s.data.find((p: any) => p[0] === 2020);
+                    const pBase = s.data.find((p: any) => p[0] === baseYear);
                     const pSelected = s.data.find((p: any) => p[0] === selectedYear);
 
-                    const baseVal = p2020 ? Number(p2020[1]) : NaN;
+                    const baseVal = pBase ? Number(pBase[1]) : NaN;
                     const endVal = pSelected ? Number(pSelected[1]) : NaN;
 
                     if (isNaN(baseVal) || isNaN(endVal)) return;
@@ -69,7 +70,7 @@ const TransitionSankey = ({ analyticalData, targetRegions, selectedYear, selecte
                 let toNode: string;
 
                 if (delta < 0) {
-                    fromNode = `2020 ${name}`;
+                    fromNode = `${baseYear} ${name}`;
                     toNode = `Transitioned Away`;
                 } else {
                     fromNode = `Newly Established`;
@@ -92,7 +93,7 @@ const TransitionSankey = ({ analyticalData, targetRegions, selectedYear, selecte
             console.warn('Sankey extraction failed:', e);
             return [];
         }
-    }, [analyticalData, targetRegions, selectedYear, selectedSubCategory]);
+    }, [analyticalData, targetRegions, selectedYear, selectedSubCategory, baseYear]);
 
     const options = useMemo<Highcharts.Options>(() => ({
         chart: {
@@ -121,7 +122,7 @@ const TransitionSankey = ({ analyticalData, targetRegions, selectedYear, selecte
         return (
             <div className="absolute inset-0 w-full h-full flex items-center justify-center bg-slate-50/50 rounded-lg">
                 <div className="text-[11px] font-bold text-slate-400 uppercase tracking-widest text-center px-4">
-                    No transition data available for {targetRegions.join(', ')} (2020 - {selectedYear}) {selectedSubCategory !== 'ALL' ? `(${selectedSubCategory})` : ''}
+                    No transition data available for {targetRegions.join(', ')} ({baseYear} - {selectedYear}) {selectedSubCategory !== 'ALL' ? `(${selectedSubCategory})` : ''}
                 </div>
             </div>
         );

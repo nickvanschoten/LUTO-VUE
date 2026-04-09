@@ -2,6 +2,17 @@ import json
 import os
 from pathlib import Path
 
+# ---------------------------------------------------------------------------
+# Root data directory — used for multi-scenario routing.
+# Set LUTO2_DATA_ROOT to the absolute path of the LUTO-VUE/data/ folder.
+# Falls back to a sibling 'data/' directory relative to this file's location
+# (i.e. luto2_api/../data  →  LUTO-VUE/data/) for zero-config local dev.
+# ---------------------------------------------------------------------------
+_ROOT_DATA_DIR = Path(
+    os.getenv("LUTO2_DATA_ROOT") or
+    Path(__file__).resolve().parents[2] / "data"
+)
+
 class DataService:
     def __init__(self, data_directory: str = None):
         """
@@ -53,11 +64,28 @@ class DataService:
 
     def get_geo_file(self, name: str):
         """
-        Parse a GeoJSON boundary file from data/geo/ (e.g. NRM_AUS, AUS_STATE).
+        Parse a GeoJSON boundary file (e.g. NRM_AUS, AUS_STATE).
+
+        Geo files are static across scenarios and live inside the first
+        available scenario's data/geo/ subfolder:
+            LUTO2_DATA_ROOT / [scenario] / data / geo / [name].js
+
+        We search _ROOT_DATA_DIR recursively so this works regardless of
+        how many scenarios are present or what they are named.
+        Raises FileNotFoundError if no matching file is found anywhere.
         """
         filename = f"{name}.js" if not name.endswith('.js') else name
-        file_path = self._find_file(filename)
-        return self._parse_js_file(file_path)
+
+        # rglob from the shared root — geo files are identical across scenarios
+        # so returning the first match is always correct
+        matches = list(_ROOT_DATA_DIR.rglob(filename))
+
+        if not matches:
+            raise FileNotFoundError(
+                f"Geo file '{filename}' could not be found anywhere under {_ROOT_DATA_DIR}"
+            )
+
+        return self._parse_js_file(matches[0])
 
     def get_map_layer(self, layer_name: str):
         """
@@ -75,11 +103,35 @@ class DataService:
         Fetches and parses chart config/data exported from LUTO2 as a .js file.
         """
         filename = f"{category}.js" if not category.endswith('.js') else category
-        
+
         # Use the recursive search function to find the file
         file_path = self._find_file(filename)
-        
+
         return self._parse_js_file(file_path)
 
-# Instantiate globally so your routers.py can import 'data_service' successfully
+    def get_chart_data_for_scenario(self, category: str, scenario: str):
+        """
+        Scenario-aware chart data fetcher.
+
+        Resolves the file at:
+            LUTO2_DATA_ROOT / [scenario] / data / [category].js
+
+        Returns the parsed JSON payload, or raises FileNotFoundError /
+        ValueError (callers should catch these and return clean HTTP errors).
+        """
+        filename = f"{category}.js" if not category.endswith('.js') else category
+
+        # Build the deterministic path — no rglob, no ambiguity
+        file_path = _ROOT_DATA_DIR / scenario / "data" / filename
+
+        if not file_path.is_file():
+            raise FileNotFoundError(
+                f"Chart file '{filename}' not found for scenario '{scenario}'. "
+                f"Expected path: {file_path}"
+            )
+
+        return self._parse_js_file(file_path)
+
+
+# Instantiate globally so routers.py can import 'data_service' successfully
 data_service = DataService()

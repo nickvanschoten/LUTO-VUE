@@ -3,6 +3,11 @@ import { create } from 'zustand';
 export type LutoMetric = 'Land Use' | 'Economics' | 'GHG' | 'Biodiversity' | 'Water Use' | 'Production';
 
 interface DashboardState {
+    // ── Scenario ──────────────────────────────────────────────────────────────
+    /** The active scenario folder name (e.g. '20260318_renew001'). Empty string until hydrated. */
+    selectedScenario: string;
+
+    // ── Dashboard Controls ────────────────────────────────────────────────────
     primaryMetric: string;
     selectedRegionIds: string[];
     selectedLandUse: string;
@@ -16,7 +21,9 @@ interface DashboardState {
     selectedAgManagement: string;
     areaDict: Record<string, number>;
     isCalculatingAreas: boolean;
+    baseYear: number;
 
+    setSelectedScenario: (scenario: string) => void;
     setPrimaryMetric: (metric: string) => void;
     setSelectedRegionIds: (ids: string[]) => void;
     setSelectedLandUse: (landUse: string) => void;
@@ -32,9 +39,13 @@ interface DashboardState {
     setSelectedAgManagement: (val: string) => void;
     setAreaDict: (dict: Record<string, number>) => void;
     setIsCalculatingAreas: (val: boolean) => void;
+    setBaseYear: (year: number) => void;
 }
 
 const useDashboardStore = create<DashboardState>((set) => ({
+    // Empty string signals "not yet hydrated" — page.tsx sets this on first scenario load
+    selectedScenario: '',
+
     primaryMetric: 'Land Use',
     selectedRegionIds: [],
     selectedLandUse: 'ALL',
@@ -48,7 +59,9 @@ const useDashboardStore = create<DashboardState>((set) => ({
     selectedAgManagement: 'ALL',
     areaDict: {},
     isCalculatingAreas: false,
+    baseYear: 2010,
 
+    setSelectedScenario: (scenario) => set({ selectedScenario: scenario }),
     setPrimaryMetric: (metric) => set({ primaryMetric: metric }),
     setSelectedRegionIds: (ids) => set({ selectedRegionIds: ids }),
     setSelectedLandUse: (landUse) => set({ selectedLandUse: landUse }),
@@ -68,6 +81,7 @@ const useDashboardStore = create<DashboardState>((set) => ({
     setSelectedAgManagement: (val) => set({ selectedAgManagement: val }),
     setAreaDict: (dict) => set({ areaDict: dict }),
     setIsCalculatingAreas: (val) => set({ isCalculatingAreas: val }),
+    setBaseYear: (year) => set({ baseYear: year }),
 }));
 
 export default useDashboardStore;

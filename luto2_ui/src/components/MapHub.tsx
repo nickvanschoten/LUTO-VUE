@@ -48,7 +48,7 @@ const MapHub = ({
     choroplethMode = 'total',
     selectedAgManagement = 'ALL',
 }: Props) => {
-    const { selectedRegionIds, setSelectedRegionIds, areaDict } = useDashboardStore();
+    const { selectedRegionIds, setSelectedRegionIds, areaDict, selectedScenario } = useDashboardStore();
 
     // Raster overlay states
     const [rasterBaseImgStr, setRasterBaseImgStr] = useState<string | null>(null);
@@ -62,11 +62,14 @@ const MapHub = ({
     // ── Base Raster Fetch ───────────────────────────
     useEffect(() => {
         if (!primaryMetric || !showBaseMap) return;
+        // Sentinel: wait for a scenario to be active before hitting the map-layer API
+        if (!selectedScenario) return;
         let cancelled = false;
 
         const fetchBaseRaster = async () => {
             try {
                 const params = new URLSearchParams({
+                    scenario: selectedScenario,
                     metric: primaryMetric,
                     subCat: 'ALL',
                     year: String(selectedYear),
@@ -109,11 +112,13 @@ const MapHub = ({
 
         fetchBaseRaster();
         return () => { cancelled = true; };
-    }, [primaryMetric, selectedYear, showBaseMap]);
+    }, [primaryMetric, selectedYear, showBaseMap, selectedScenario]);
 
     // ── Data Points Raster Fetch ───────────────────────────
     useEffect(() => {
         if (!primaryMetric || !showDataPoints || selectedSubCategory === 'ALL') return;
+        // Sentinel: wait for a scenario to be active before hitting the map-layer API
+        if (!selectedScenario) return;
         let cancelled = false;
 
         const fetchDataRaster = async () => {
@@ -137,6 +142,7 @@ const MapHub = ({
                 }
 
                 const params = new URLSearchParams({
+                    scenario: selectedScenario,
                     metric: primaryMetric,
                     parentCat: finalParentCat,
                     subCat: finalSubCat,
@@ -187,7 +193,7 @@ const MapHub = ({
 
         fetchDataRaster();
         return () => { cancelled = true; };
-    }, [primaryMetric, selectedSubCategory, selectedYear, showDataPoints, selectedAgManagement]);
+    }, [primaryMetric, selectedSubCategory, selectedYear, showDataPoints, selectedAgManagement, selectedScenario]);
 
     // Clear rasters when toggled off
     useEffect(() => {

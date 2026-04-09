@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
 import fs from 'fs/promises';
 
-const MAP_LAYERS_DIR = path.join(process.cwd(), '..', 'data', 'map_layers');
+// Root data directory — process.cwd() resolves to .../LUTO-VUE/luto2_ui at runtime
+const ROOT_DATA_DIR = path.join(process.cwd(), '..', 'data');
 
 // Phase 28B: Use lowercase partial matches for bulletproof file routing
 const NON_AG_CLASSES = [
@@ -24,12 +25,18 @@ const METRIC_DEFAULT_CANDIDATES: Record<string, string[]> = {
     'Production': ['map_quantities_Sum', 'map_quantities_Ag'],
 };
 
-async function tryReadFile(name: string): Promise<string | null> {
-    const filePath = path.join(MAP_LAYERS_DIR, `${name}.js`);
+/**
+ * Attempts to read a map layer .js file for a given scenario.
+ * Returns null (never throws) if the file is missing or unreadable,
+ * ensuring Deck.gl can degrade gracefully to a transparent layer.
+ */
+async function tryReadFile(scenario: string, name: string): Promise<string | null> {
+    const filePath = path.join(ROOT_DATA_DIR, scenario, 'data', 'map_layers', `${name}.js`);
     try {
         const text = await fs.readFile(filePath, 'utf-8');
         return text;
-    } catch (e: any) {
+    } catch {
+        // ENOENT, EACCES, etc. — return null so caller can degrade gracefully
         return null;
     }
 }
@@ -89,12 +96,18 @@ const extractSpatialPayload = (parsedData: any, parentCat: string | null, subCat
 
 export async function GET(req: NextRequest) {
     const { searchParams } = req.nextUrl;
+    const scenario = searchParams.get('scenario') || '';
     const metric = searchParams.get('metric') || '';
     const parentCat = searchParams.get('parentCat') || searchParams.get('subCat');
     const subCat = searchParams.get('subCat') || 'ALL';
     const year = searchParams.get('year') || '2050';
 
-    console.log('[map-layer] Request:', { metric, parentCat, subCat, year });
+    // Sentinel guard: no scenario means the UI hasn't hydrated yet — return empty silently
+    if (!scenario) {
+        return NextResponse.json({ empty: true }, { status: 200 });
+    }
+
+    console.log('[map-layer] Request:', { scenario, metric, parentCat, subCat, year });
 
     // Phase 28B: Smarter File Routing using the actual target requested
     // If subCat is ALL, we must route based on the parentCat!
@@ -128,7 +141,7 @@ export async function GET(req: NextRequest) {
     let rawText: string | null = null;
     let resolvedFile = '';
     for (const name of candidates) {
-        rawText = await tryReadFile(name);
+        rawText = await tryReadFile(scenario, name);
         if (rawText) { resolvedFile = name; break; }
     }
 

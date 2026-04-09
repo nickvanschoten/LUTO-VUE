@@ -87,6 +87,7 @@ const calculateGeoJsonAreas = (geoData: any): Record<string, number> => {
 export default function Dashboard() {
     const {
         primaryMetric, setPrimaryMetric,
+        selectedScenario, setSelectedScenario,
         selectedYear, setSelectedYear,
         selectedLandUse, setSelectedLandUse,
         selectedRegionIds, setSelectedRegionIds,
@@ -97,11 +98,13 @@ export default function Dashboard() {
         selectedAgManagement, setSelectedAgManagement,
         areaDict, setAreaDict,
         isCalculatingAreas, setIsCalculatingAreas,
+        baseYear, setBaseYear,
     } = useDashboardStore();
 
     const [analyticalData, setAnalyticalData] = useState<any[]>([]);
     const [geoData, setGeoData] = useState<any>(null);
     const [apiStatus, setApiStatus] = useState<'loading' | 'online' | 'offline'>('loading');
+    const [availableScenarios, setAvailableScenarios] = useState<{ id: string; label: string }[]>([]);
 
     // Normalize regional array extractions across multi-schema payloads with STRICT type safety
     const extractSeriesArray = (node: any) => {
@@ -115,13 +118,36 @@ export default function Dashboard() {
         return [];
     };
 
-    // Fetch analytical data based on primaryMetric
+    // ── Scenario Scanner: fetch available scenarios on mount ──────────────────
     useEffect(() => {
+        const loadScenarios = async () => {
+            try {
+                const res = await fetch('/api/scenarios');
+                if (!res.ok) return;
+                const list: { id: string; label: string }[] = await res.json();
+                setAvailableScenarios(list);
+                // Auto-select the first discovered scenario if none is active yet
+                if (list.length > 0 && !selectedScenario) {
+                    setSelectedScenario(list[0].id);
+                }
+            } catch (err) {
+                console.warn('[scenarios] Failed to load scenario list:', err);
+            }
+        };
+        loadScenarios();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []); // Intentionally run once — selectedScenario initialised from '' sentinel
+
+    // Fetch analytical data based on primaryMetric and active scenario
+    useEffect(() => {
+        // Sentinel: stay silent until the scanner has resolved a scenario
+        if (!selectedScenario) return;
+
         const fetchData = async () => {
             setApiStatus('loading');
 
             const fetchAndParse = async (filename: string) => {
-                const url = `${API}/charts/${filename}`;
+                const url = `${API}/charts/${filename}?scenario=${selectedScenario}`;
                 const response = await fetch(url);
                 if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
                 const rawText = await response.text();
@@ -163,6 +189,34 @@ export default function Dashboard() {
 
                         dataObj[region] = [...safeAg, ...safeNonAg, ...safeAm];
                     });
+
+                } else if (primaryMetric === 'Production') {
+                    // Fuse base production totals with renewable energy Am data.
+                    // Renewable_energy_Am.js is optional — if missing for this scenario
+                    // the .catch guard returns {} and the fuse simply adds nothing.
+                    const [prodRes, renewableRes] = await Promise.all([
+                        fetchAndParse('Production_Sum').catch(() => ({})),
+                        fetchAndParse('Renewable_energy_Am').catch(() => ({})),
+                    ]);
+
+                    const allRegions = new Set([
+                        ...Object.keys(prodRes || {}),
+                        ...Object.keys(renewableRes || {}),
+                    ]);
+
+                    allRegions.forEach(region => {
+                        if (region === 'metadata' || region === 'default') return;
+
+                        const prodArr = extractSeriesArray(prodRes?.[region]);
+                        const renewableArr = extractSeriesArray(renewableRes?.[region]);
+
+                        // Strict iterability check mirrors the Land Use pattern
+                        const safeProduction = Array.isArray(prodArr) ? prodArr : [];
+                        const safeRenewable = Array.isArray(renewableArr) ? renewableArr : [];
+
+                        dataObj[region] = [...safeProduction, ...safeRenewable];
+                    });
+
                 } else {
                     const filename = METRIC_FILE_MAP[primaryMetric];
                     if (!filename) {
@@ -174,6 +228,26 @@ export default function Dashboard() {
 
                 const arr = Array.isArray(dataObj) ? dataObj : (dataObj ? [dataObj] : []);
                 setAnalyticalData(arr);
+
+                // Detect base year from the retrieved dataset
+                if (arr.length > 0) {
+                    const blob = arr[0];
+                    const firstRegion = Object.keys(blob).find(k => k !== 'metadata' && k !== 'default');
+                    if (firstRegion) {
+                        const series = extractSeriesArray(blob[firstRegion]);
+                        if (series.length > 0 && Array.isArray(series[0].data) && series[0].data.length > 0) {
+                            const detectedBaseYear = Number(series[0].data[0][0]);
+                            if (!isNaN(detectedBaseYear)) {
+                                setBaseYear(detectedBaseYear);
+                                // Clamp selectedYear if it's now out of bounds
+                                if (selectedYear < detectedBaseYear) {
+                                    setSelectedYear(detectedBaseYear);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 setApiStatus('online');
             } catch (e: any) {
                 console.warn(`Fetch aborted for ${primaryMetric}:`, e.message || e);
@@ -183,7 +257,7 @@ export default function Dashboard() {
         };
 
         fetchData();
-    }, [primaryMetric]);
+    }, [primaryMetric, selectedScenario]);
 
     // Pre-fetch GeoJSON and Cache Geometry
     useEffect(() => {
@@ -324,6 +398,25 @@ export default function Dashboard() {
                     </div>
 
                     <div className="space-y-4">
+                        {/* Scenario Selector — master switch for all data pipelines */}
+                        <div>
+                            <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold block mb-1.5">Active Scenario Run</label>
+                            <select
+                                value={selectedScenario}
+                                onChange={e => setSelectedScenario(e.target.value)}
+                                disabled={availableScenarios.length === 0}
+                                className="w-full text-xs font-bold border-2 border-[#00E261]/40 rounded-md px-2 py-2 bg-[#0F2E20]/5 text-[#0F2E20] disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                                {availableScenarios.length === 0 ? (
+                                    <option value="">Scanning for scenarios…</option>
+                                ) : (
+                                    availableScenarios.map(s => (
+                                        <option key={s.id} value={s.id}>{s.label}</option>
+                                    ))
+                                )}
+                            </select>
+                        </div>
+
                         {/* Primary Metric Toggle */}
                         <div>
                             <label className="text-[10px] text-slate-400 uppercase tracking-wider font-bold block mb-1.5">Simulation Analytical Category</label>
@@ -417,7 +510,7 @@ export default function Dashboard() {
                                 <span className="text-[#0F2E20]">Projection Timeframe</span>
                                 <span className="text-[#00E261]">{selectedYear}</span>
                             </div>
-                            <input type="range" min={2020} max={2050} step="5"
+                            <input type="range" min={baseYear} max={2050} step="5"
                                 value={selectedYear}
                                 onChange={e => setSelectedYear(Number(e.target.value))}
                                 className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-[#00E261]"
@@ -555,7 +648,8 @@ export default function Dashboard() {
                                     targetRegions={selectedRegionIds.length > 0 ? selectedRegionIds : ['AUSTRALIA']}
                                     selectedYear={selectedYear}
                                     selectedSubCategory={selectedLandUse}
-                                    title={`Land Use Flow/Transitions (2020 - ${selectedYear})`}
+                                    baseYear={baseYear}
+                                    title={`Land Use Flow/Transitions (${baseYear} - ${selectedYear})`}
                                 />
                             </div>
                         </div>

@@ -41,6 +41,13 @@ cd luto2_api
 call pip install -r requirements.txt
 cd ..
 
+:: Cleanup Phase - UI Cache
+echo Cleaning up Next.js cache...
+if exist "luto2_ui\.next\cache" (
+    rmdir /s /q "luto2_ui\.next\cache"
+    echo [OK] Next.js cache removed successfully.
+)
+
 :: Launch Phase (Concurrent)
 echo Starting FastAPI Backend (Port 8000)...
 start "LUTO2 FastAPI Server" cmd /k "cd luto2_api && uvicorn app.main:app --host 0.0.0.0 --port 8000"

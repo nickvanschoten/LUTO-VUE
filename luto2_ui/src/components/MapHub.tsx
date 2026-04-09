@@ -116,37 +116,19 @@ const MapHub = ({
 
     // ── Data Points Raster Fetch ───────────────────────────
     useEffect(() => {
-        if (!primaryMetric || !showDataPoints || selectedSubCategory === 'ALL') return;
+        if (!primaryMetric || !showDataPoints || (selectedSubCategory === 'ALL' && (!selectedAgManagement || selectedAgManagement === 'ALL'))) return;
         // Sentinel: wait for a scenario to be active before hitting the map-layer API
         if (!selectedScenario) return;
         let cancelled = false;
 
         const fetchDataRaster = async () => {
             try {
-                // 1. Determine if the user selected an Infrastructure class as the PRIMARY category
-                const isInfrastructureMain = [
-                    'Onshore Wind', 'Utility Solar PV',
-                    'Human-induced regeneration (Beef)', 'Human-induced regeneration (Sheep)',
-                    'Savanna Burning'
-                ].includes(selectedSubCategory);
-
-                // 2. Set the Parent Category. If Infrastructure is main, the Parent must be ALL.
-                const finalParentCat = isInfrastructureMain ? 'ALL' : selectedSubCategory;
-
-                // 3. Set the Sub-Category (Ag Management).
-                let finalSubCat = 'ALL';
-                if (isInfrastructureMain) {
-                    finalSubCat = selectedSubCategory; // They want the global infrastructure map
-                } else if (selectedAgManagement && selectedAgManagement !== 'ALL') {
-                    finalSubCat = selectedAgManagement; // They want the specific intersection
-                }
-
                 const params = new URLSearchParams({
-                    scenario: selectedScenario,
                     metric: primaryMetric,
-                    parentCat: finalParentCat,
-                    subCat: finalSubCat,
+                    parentCat: selectedSubCategory === 'ALL' ? 'ALL' : selectedSubCategory,
+                    subCat: selectedAgManagement !== 'ALL' ? selectedAgManagement : 'ALL',
                     year: String(selectedYear),
+                    scenario: selectedScenario
                 });
 
                 const url = `/api/map-layer?${params.toString()}`;
@@ -201,8 +183,8 @@ const MapHub = ({
     }, [showBaseMap]);
 
     useEffect(() => {
-        if (!showDataPoints || selectedSubCategory === 'ALL') setRasterDataImgStr(null);
-    }, [showDataPoints, selectedSubCategory]);
+        if (!showDataPoints || (selectedSubCategory === 'ALL' && (!selectedAgManagement || selectedAgManagement === 'ALL'))) setRasterDataImgStr(null);
+    }, [showDataPoints, selectedSubCategory, selectedAgManagement]);
 
     // Canvas Generators
     useEffect(() => {
@@ -278,6 +260,13 @@ const MapHub = ({
         regionEntries.forEach(({ name: region, data: regionData }) => {
             if (region === 'AUSTRALIA') return;
 
+            const safeRegion = region.trim().toLowerCase();
+
+            if (!regionData) {
+                dict[safeRegion] = 0; // Graceful fallback for missing regional JSON data
+                return;
+            }
+
             let rawSeries: any[] = [];
 
             if (Array.isArray(regionData)) {
@@ -285,38 +274,66 @@ const MapHub = ({
             } else if (regionData && typeof regionData === 'object') {
                 rawSeries = (regionData as any)['ALL'] || (regionData as any)[Object.keys(regionData)[0]] || [];
             }
-            if (!Array.isArray(rawSeries) || rawSeries.length === 0) return;
+            if (!Array.isArray(rawSeries) || rawSeries.length === 0) {
+                dict[safeRegion] = 0; // Graceful fallback for missing regional JSON data
+                return;
+            }
 
             // Case-insensitive match to bridge UI strings to Python backend strings
             const targetFilter = (selectedAgManagement && selectedAgManagement !== 'ALL')
                 ? selectedAgManagement
                 : selectedSubCategory;
 
-            // Case-insensitive match to bridge UI strings to Python backend strings
-            const targetSeries = (targetFilter && targetFilter !== 'ALL')
-                ? rawSeries.find((s: any) => s.name && s.name.toLowerCase() === targetFilter.toLowerCase())
-                : rawSeries[0];
+            // Find all matching series to support Production Bypass aggregation
+            const matchedSeries = rawSeries.filter((s: any) => {
+                if (targetFilter && targetFilter !== 'ALL') {
+                    if (s.name && s.name.toLowerCase() === targetFilter.toLowerCase()) return true;
+                    if (s._agManagement && s._agManagement.toLowerCase() === targetFilter.toLowerCase()) return true;
 
-            if (targetSeries && Array.isArray(targetSeries.data)) {
-                // Data is [year, value] tuples — find the exact year
-                const dataPoint = targetSeries.data.find((p: any) => p[0] === selectedYear);
-                let val = dataPoint ? Number(dataPoint[1]) : NaN;
-
-                if (!isNaN(val)) {
-                    // Normalise key for case-insensitive GeoJSON matching
-                    const safeRegion = region.trim().toLowerCase();
-
-                    let finalVal = val;
-                    if (choroplethMode === 'density') {
-                        const area = areaDict[safeRegion] || 1;
-                        if (area === 1) console.warn(`GeoJSON missing area property for density calculation: ${safeRegion}`);
-                        finalVal = val / area;
+                    // Production Bypass
+                    if (primaryMetric === 'Production') {
+                        const isInfra = ['onshore wind', 'utility solar pv', 'human-induced regeneration (beef)', 'human-induced regeneration (sheep)', 'savanna burning', 'environmental plantings'].includes(targetFilter.toLowerCase());
+                        if (isInfra && s._agManagement && s._agManagement.toLowerCase() === targetFilter.toLowerCase()) return true;
                     }
-
-                    dict[safeRegion] = finalVal;
-                    if (finalVal < min) min = finalVal;
-                    if (finalVal > max) max = finalVal;
+                    return false;
                 }
+                return true; // if ALL, maybe just take the first or sum? Actually, if targetFilter === 'ALL', MapHub historically just took rawSeries[0]
+            });
+
+            // If ALL, emulate legacy behaviour
+            const seriesToProcess = (targetFilter && targetFilter !== 'ALL') ? matchedSeries : [rawSeries[0]];
+
+            // If we found NO matching series (e.g. they only have missing data for this infrastructure locally)
+            if (seriesToProcess.length === 0) {
+                dict[safeRegion] = 0;
+                return;
+            }
+
+            let val = NaN;
+            seriesToProcess.forEach(s => {
+                if (s && Array.isArray(s.data)) {
+                    const dataPoint = s.data.find((p: any) => p[0] === selectedYear);
+                    if (dataPoint) {
+                        val = (isNaN(val) ? 0 : val) + Number(dataPoint[1]);
+                    }
+                }
+            });
+
+            if (!isNaN(val)) {
+                // Normalise key for case-insensitive GeoJSON matching
+                const safeRegion = region.trim().toLowerCase();
+
+                let finalVal = val;
+                if (choroplethMode === 'density') {
+                    const area = areaDict[safeRegion] || 1;
+                    // Safely ignore warning if val is explicitly 0 (often implies missing backend raster fallback context)
+                    if (area === 1 && val !== 0 && finalVal !== 0) console.warn(`GeoJSON missing area property for density calculation: ${safeRegion}`);
+                    finalVal = val / area;
+                }
+
+                dict[safeRegion] = finalVal;
+                if (finalVal < min) min = finalVal;
+                if (finalVal > max) max = finalVal;
             }
         });
 

@@ -2,7 +2,7 @@ import React from 'react';
 import './globals.css';
 
 export const metadata = {
-  title: 'LUTO2 Digital Twin',
+  title: 'LUTO-VUE',
   description: 'Land-use Trade-offs and Optimisation — Scenario Explorer',
 };
 

@@ -9,6 +9,7 @@ interface Props {
     targetRegions: string[];
     selectedSubCategory: string;
     selectedAgManagement: string;
+    primaryMetric?: string;
     title?: string;
 }
 
@@ -20,7 +21,7 @@ const COMMODITY_GROUPS: Record<string, string> = {
     'Beef - modified land': 'Livestock', 'Sheep - modified land': 'Livestock', 'Dairy - modified land': 'Livestock', 'Beef - natural land': 'Livestock', 'Sheep - natural land': 'Livestock', 'Dairy - natural land': 'Livestock'
 };
 
-const TimeSeriesStackedChart = ({ analyticalData, targetRegions, selectedSubCategory, title }: Props) => {
+const TimeSeriesStackedChart = ({ analyticalData, targetRegions, selectedSubCategory, selectedAgManagement, primaryMetric, title }: Props) => {
     const chartSeries = useMemo(() => {
         if (!analyticalData || analyticalData.length === 0 || !targetRegions || targetRegions.length === 0) return [];
         try {
@@ -42,10 +43,29 @@ const TimeSeriesStackedChart = ({ analyticalData, targetRegions, selectedSubCate
                 if (!Array.isArray(rawSeries)) return;
 
                 // 2. State Filtering (and Overlay Hard-Purge)
-                const filteredSeries = rawSeries.filter((s: any) =>
-                    s.name && !s.name.toLowerCase().includes('agricultural management') &&
-                    (selectedSubCategory === 'ALL' || !selectedSubCategory || s.name.toLowerCase() === selectedSubCategory.toLowerCase())
-                );
+                const filteredSeries = rawSeries.filter((s: any) => {
+                    // 1. Standard Cleanup
+                    if (!s.name || s.name.toLowerCase().includes('agricultural management')) return false;
+
+                    // 2. Production Bypass: If we are in Production and examining the renewable file,
+                    // we bypass the strict tech check because the tech string isn't in the file.
+                    const isInfrastructureMain = [
+                        'onshore wind', 'utility solar pv', 'human-induced regeneration (beef)',
+                        'human-induced regeneration (sheep)', 'savanna burning', 'environmental plantings'
+                    ].includes((selectedAgManagement || '').toLowerCase());
+                    
+                    if (primaryMetric === 'Production' && isInfrastructureMain && s._agManagement && s._agManagement.toLowerCase() === (selectedAgManagement || '').toLowerCase()) {
+                        return true; // Render the aggregated renewable production commodities
+                    }
+
+                    // 3. Standard Filtering for Land Use / Area
+                    const matchesSubCat = selectedSubCategory === 'ALL' || !selectedSubCategory || s.name.toLowerCase() === selectedSubCategory.toLowerCase();
+                    const matchesAgMgmt = selectedAgManagement === 'ALL' || !selectedAgManagement ||
+                        (s._agManagement && s._agManagement.toLowerCase() === selectedAgManagement.toLowerCase()) ||
+                        (s.name.toLowerCase() === selectedAgManagement.toLowerCase());
+
+                    return matchesSubCat && matchesAgMgmt;
+                });
 
                 if (!Array.isArray(filteredSeries)) return;
 
@@ -79,7 +99,7 @@ const TimeSeriesStackedChart = ({ analyticalData, targetRegions, selectedSubCate
             console.warn('Series extraction failed:', e);
             return [];
         }
-    }, [analyticalData, targetRegions, selectedSubCategory]);
+    }, [analyticalData, targetRegions, selectedSubCategory, selectedAgManagement, primaryMetric]);
 
     const options = useMemo<Highcharts.Options>(() => ({
         chart: {

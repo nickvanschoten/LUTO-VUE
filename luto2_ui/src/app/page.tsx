@@ -105,6 +105,7 @@ export default function Dashboard() {
     const [geoData, setGeoData] = useState<any>(null);
     const [apiStatus, setApiStatus] = useState<'loading' | 'online' | 'offline'>('loading');
     const [availableScenarios, setAvailableScenarios] = useState<{ id: string; label: string }[]>([]);
+    const [hasAmData, setHasAmData] = useState(false);
 
     // Normalize regional array extractions across multi-schema payloads with STRICT type safety
     const extractSeriesArray = (node: any) => {
@@ -117,6 +118,30 @@ export default function Dashboard() {
         }
         return [];
     };
+
+    // Helper to preserve the hierarchy in _Am files by tagging the infrastructure explicitly
+    const extractAmSeriesArray = (node: any) => {
+        if (!node || typeof node !== 'object') return [];
+        let result: any[] = [];
+        
+        // Iterate through top-level keys like "Onshore Wind", "ALL", etc.
+        Object.keys(node).forEach(techKey => {
+            let targetArray = null;
+            if (Array.isArray(node[techKey])) {
+                targetArray = node[techKey];
+            } else if (node[techKey] && Array.isArray(node[techKey]['ALL'])) {
+                targetArray = node[techKey]['ALL'];
+            }
+            
+            if (targetArray) {
+                // Deep clone and inject the parent key for downstream chart filtering
+                const tagged = targetArray.map((s: any) => ({...s, _agManagement: techKey}));
+                result = [...result, ...tagged];
+            }
+        });
+        return result;
+    };
+
 
     // ── Scenario Scanner: fetch available scenarios on mount ──────────────────
     useEffect(() => {
@@ -145,6 +170,7 @@ export default function Dashboard() {
 
         const fetchData = async () => {
             setApiStatus('loading');
+            setHasAmData(false);
 
             const fetchAndParse = async (filename: string) => {
                 const url = `${API}/charts/${filename}?scenario=${selectedScenario}`;
@@ -169,6 +195,10 @@ export default function Dashboard() {
                         fetchAndParse('Area_Am').catch(() => ({}))
                     ]);
 
+                    if (amRes && Object.keys(amRes).length > 0) {
+                        setHasAmData(true);
+                    }
+
                     const allRegions = new Set([
                         ...Object.keys(agRes || {}),
                         ...Object.keys(nonAgRes || {}),
@@ -180,7 +210,8 @@ export default function Dashboard() {
 
                         const agArr = extractSeriesArray(agRes?.[region]);
                         const nonAgArr = extractSeriesArray(nonAgRes?.[region]);
-                        const amArr = extractSeriesArray(amRes?.[region]);
+                        const amArr = extractAmSeriesArray(amRes?.[region]);
+
 
                         // Secondary safety net: guarantee iterability before spreading
                         const safeAg = Array.isArray(agArr) ? agArr : [];
@@ -199,6 +230,10 @@ export default function Dashboard() {
                         fetchAndParse('Renewable_energy_Am').catch(() => ({})),
                     ]);
 
+                    if (renewableRes && Object.keys(renewableRes).length > 0) {
+                        setHasAmData(true);
+                    }
+
                     const allRegions = new Set([
                         ...Object.keys(prodRes || {}),
                         ...Object.keys(renewableRes || {}),
@@ -208,7 +243,8 @@ export default function Dashboard() {
                         if (region === 'metadata' || region === 'default') return;
 
                         const prodArr = extractSeriesArray(prodRes?.[region]);
-                        const renewableArr = extractSeriesArray(renewableRes?.[region]);
+                        const renewableArr = extractAmSeriesArray(renewableRes?.[region]);
+
 
                         // Strict iterability check mirrors the Land Use pattern
                         const safeProduction = Array.isArray(prodArr) ? prodArr : [];
@@ -305,7 +341,7 @@ export default function Dashboard() {
             regionData.forEach((series: any) => {
                 if (!series || !series.name || !Array.isArray(series.data)) return;
 
-                const sum = series.data.reduce((acc: number, tuple: any) => acc + (Number(tuple[1]) || 0), 0);
+                const sum = series.data.reduce((acc: number, tuple: any) => acc + Math.abs(Number(tuple[1]) || 0), 0);
                 if (sum > 0) validSeriesSet.add(series.name);
             });
         });
@@ -315,23 +351,27 @@ export default function Dashboard() {
             .filter(Boolean)
             .filter((name: string) => !name.toLowerCase().includes('agricultural management'));
 
-        // Phase 26: Force spatial infrastructures into the main dropdown
-        const requiredInfrastructures = [
-            'Onshore Wind',
-            'Utility Solar PV',
-            'Human-induced regeneration (Beef)',
-            'Human-induced regeneration (Sheep)',
-            'Savanna Burning'
-        ];
+        // Safe Hybrid Injection
+        if (hasAmData) {
+            const requiredInfrastructures = [
+                'Onshore Wind',
+                'Utility Solar PV',
+                'Human-induced regeneration (Beef)',
+                'Human-induced regeneration (Sheep)',
+                'Savanna Burning',
+                'Environmental Plantings'
+            ];
 
-        requiredInfrastructures.forEach(infra => {
-            if (!filtered.includes(infra)) {
-                filtered.push(infra);
-            }
-        });
+            requiredInfrastructures.forEach(infra => {
+                if (!filtered.includes(infra)) {
+                    filtered.push(infra);
+                }
+            });
+        }
 
         return filtered.sort();
-    }, [analyticalData, selectedRegionIds]);
+    }, [analyticalData, selectedRegionIds, hasAmData]);
+
 
     // Fallback Safety UI reset hook recovering crashed Dropdowns mapped against invalid regions
     useEffect(() => {
@@ -368,6 +408,16 @@ export default function Dashboard() {
         }
     };
 
+    // Data Interceptor: Silently route primary dropdown infrastructural selections to the _Am pipelines.
+    const isInfrastructureMain = [
+        'Onshore Wind', 'Utility Solar PV', 
+        'Human-induced regeneration (Beef)', 'Human-induced regeneration (Sheep)', 
+        'Savanna Burning', 'Environmental Plantings'
+    ].includes(selectedLandUse);
+
+    const activeSubCat = isInfrastructureMain ? 'ALL' : selectedLandUse;
+    const activeAgMgmt = isInfrastructureMain ? selectedLandUse : selectedAgManagement;
+
     return (
         <div className="flex flex-row w-screen h-screen overflow-hidden bg-slate-50 font-sans text-slate-900">
             {/* Left Pane (Spatial Engine) */}
@@ -376,13 +426,13 @@ export default function Dashboard() {
                     geoData={geoData}
                     analyticalData={analyticalData}
                     primaryMetric={primaryMetric}
-                    selectedSubCategory={selectedLandUse}
+                    selectedSubCategory={activeSubCat}
                     selectedYear={selectedYear}
                     showBaseMap={showBaseMap}
                     showDataPoints={showDataPoints}
                     showChoropleth={showChoropleth}
                     choroplethMode={choroplethMode}
-                    selectedAgManagement={selectedAgManagement}
+                    selectedAgManagement={activeAgMgmt}
                 />
             </div>
 
@@ -607,8 +657,9 @@ export default function Dashboard() {
                                 <TimeSeriesStackedChart
                                     analyticalData={analyticalData}
                                     targetRegions={['AUSTRALIA']}
-                                    selectedSubCategory={selectedLandUse}
-                                    selectedAgManagement={selectedAgManagement}
+                                    selectedSubCategory={activeSubCat}
+                                    selectedAgManagement={activeAgMgmt}
+                                    primaryMetric={primaryMetric}
                                     title={`National ${primaryMetric} Projections`}
                                 />
                             </div>
@@ -616,8 +667,9 @@ export default function Dashboard() {
                                 <TimeSeriesStackedChart
                                     analyticalData={analyticalData}
                                     targetRegions={selectedRegionIds.length > 0 ? selectedRegionIds : ['AUSTRALIA']}
-                                    selectedSubCategory={selectedLandUse}
-                                    selectedAgManagement={selectedAgManagement}
+                                    selectedSubCategory={activeSubCat}
+                                    selectedAgManagement={activeAgMgmt}
+                                    primaryMetric={primaryMetric}
                                     title={`Regional ${primaryMetric} Performance`}
                                 />
                             </div>
@@ -628,8 +680,9 @@ export default function Dashboard() {
                                 <LandUseAreaChart
                                     analyticalData={analyticalData}
                                     targetRegions={['AUSTRALIA']}
-                                    selectedSubCategory={selectedLandUse}
-                                    selectedAgManagement={selectedAgManagement}
+                                    selectedSubCategory={activeSubCat}
+                                    selectedAgManagement={activeAgMgmt}
+                                    primaryMetric={primaryMetric}
                                     title="National Land Use Trends"
                                 />
                             </div>
@@ -637,8 +690,9 @@ export default function Dashboard() {
                                 <LandUseAreaChart
                                     analyticalData={analyticalData}
                                     targetRegions={selectedRegionIds.length > 0 ? selectedRegionIds : ['AUSTRALIA']}
-                                    selectedSubCategory={selectedLandUse}
-                                    selectedAgManagement={selectedAgManagement}
+                                    selectedSubCategory={activeSubCat}
+                                    selectedAgManagement={activeAgMgmt}
+                                    primaryMetric={primaryMetric}
                                     title="Regional Land Use Performance"
                                 />
                             </div>
@@ -647,7 +701,7 @@ export default function Dashboard() {
                                     analyticalData={analyticalData}
                                     targetRegions={selectedRegionIds.length > 0 ? selectedRegionIds : ['AUSTRALIA']}
                                     selectedYear={selectedYear}
-                                    selectedSubCategory={selectedLandUse}
+                                    selectedSubCategory={activeSubCat}
                                     baseYear={baseYear}
                                     title={`Land Use Flow/Transitions (${baseYear} - ${selectedYear})`}
                                 />

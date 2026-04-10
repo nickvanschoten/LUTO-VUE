@@ -94,7 +94,26 @@ const TimeSeriesStackedChart = ({ analyticalData, targetRegions, selectedSubCate
                 });
             });
 
-            return Object.values(groupedSeriesObj);
+            // 4. Series Overrides: Pivot non-additive metrics to line charts
+            const OVERRIDE_LIST = ['profit', 'target', 'existing capacity', 'net revenue', 'total cost', 'emissions target'];
+
+            return Object.values(groupedSeriesObj).map((s: any) => {
+                const isOverride = OVERRIDE_LIST.includes(s.name.toLowerCase());
+
+                if (isOverride) {
+                    return {
+                        ...s,
+                        type: 'line',
+                        stacking: undefined, // Prevent addition to area totals
+                        zIndex: 5,          // Draw on top of areas
+                        lineWidth: 3,
+                        marker: { enabled: false }
+                    };
+                }
+
+                // Keep default area/stacking for additive commodities
+                return s;
+            });
         } catch (e) {
             console.warn('Series extraction failed:', e);
             return [];

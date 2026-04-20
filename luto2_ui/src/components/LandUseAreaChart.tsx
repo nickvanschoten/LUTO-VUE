@@ -3,6 +3,8 @@
 import React, { useMemo } from 'react';
 import Highcharts from 'highcharts';
 import HighchartsReact from 'highcharts-react-official';
+import { Download } from 'lucide-react';
+import { exportChartToCSV } from '../utils/exportUtils';
 
 interface Props {
     analyticalData: any[];
@@ -164,12 +166,19 @@ const LandUseAreaChart = ({ analyticalData, targetRegions, selectedSubCategory, 
     }
 
     return (
-        <div className="absolute inset-0 w-full h-full">
+        <div className="absolute inset-0 w-full h-full relative group">
             <HighchartsReact
                 highcharts={Highcharts}
                 options={options}
                 containerProps={{ className: 'w-full h-full' }}
             />
+            <button
+                onClick={() => exportChartToCSV(chartSeries, title || 'Land Use Data')}
+                className="absolute top-3 right-4 p-1.5 bg-white/80 hover:bg-slate-100 text-slate-400 hover:text-[#00E261] rounded shadow-sm border border-slate-200 opacity-0 group-hover:opacity-100 transition-all z-10"
+                title="Download Data (CSV)"
+            >
+                <Download size={14} />
+            </button>
         </div>
     );
 };

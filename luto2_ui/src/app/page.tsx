@@ -6,6 +6,7 @@ import MapHub from '@/components/MapHub';
 import TimeSeriesStackedChart from '@/components/TimeSeriesStackedChart';
 import LandUseAreaChart from '@/components/LandUseAreaChart';
 import TransitionSankey from '@/components/TransitionSankey';
+import { VRE_INFRASTRUCTURE_LIST } from '@/utils/constants';
 
 const API = 'http://localhost:8000/api/v1';
 
@@ -102,6 +103,7 @@ export default function Dashboard() {
     } = useDashboardStore();
 
     const [analyticalData, setAnalyticalData] = useState<any[]>([]);
+    const [mapProxyData, setMapProxyData] = useState<any[] | null>(null);
     const [geoData, setGeoData] = useState<any>(null);
     const [apiStatus, setApiStatus] = useState<'loading' | 'online' | 'offline'>('loading');
     const [availableScenarios, setAvailableScenarios] = useState<{ id: string; label: string }[]>([]);
@@ -123,7 +125,7 @@ export default function Dashboard() {
     const extractAmSeriesArray = (node: any) => {
         if (!node || typeof node !== 'object') return [];
         let result: any[] = [];
-        
+
         // Iterate through top-level keys like "Onshore Wind", "ALL", etc.
         Object.keys(node).forEach(techKey => {
             let targetArray = null;
@@ -132,10 +134,10 @@ export default function Dashboard() {
             } else if (node[techKey] && Array.isArray(node[techKey]['ALL'])) {
                 targetArray = node[techKey]['ALL'];
             }
-            
+
             if (targetArray) {
                 // Deep clone and inject the parent key for downstream chart filtering
-                const tagged = targetArray.map((s: any) => ({...s, _agManagement: techKey}));
+                const tagged = targetArray.map((s: any) => ({ ...s, _agManagement: techKey }));
                 result = [...result, ...tagged];
             }
         });
@@ -171,6 +173,7 @@ export default function Dashboard() {
         const fetchData = async () => {
             setApiStatus('loading');
             setHasAmData(false);
+            setMapProxyData(null);
 
             const fetchAndParse = async (filename: string) => {
                 const url = `${API}/charts/${filename}?scenario=${selectedScenario}`;
@@ -223,20 +226,24 @@ export default function Dashboard() {
 
                 } else if (primaryMetric === 'Production') {
                     // Fuse base production totals with renewable energy Am data.
-                    // Renewable_energy_Am.js is optional — if missing for this scenario
-                    // the .catch guard returns {} and the fuse simply adds nothing.
-                    const [prodRes, renewableRes] = await Promise.all([
+                    const [prodRes, renewableRes, proxyAmRes] = await Promise.all([
                         fetchAndParse('Production_Sum').catch(() => ({})),
                         fetchAndParse('Renewable_energy_Am').catch(() => ({})),
+                        fetchAndParse('Area_Am').catch(() => ({}))
                     ]);
 
                     if (renewableRes && Object.keys(renewableRes).length > 0) {
                         setHasAmData(true);
                     }
 
+                    // Build Proxy Data Object for MapHub Choropleth Override (Squashing Production array flatlines)
+                    if (proxyAmRes && Object.keys(proxyAmRes).length > 0) {
+                        setMapProxyData([proxyAmRes]);
+                    }
+
                     const allRegions = new Set([
                         ...Object.keys(prodRes || {}),
-                        ...Object.keys(renewableRes || {}),
+                        ...Object.keys(renewableRes || {})
                     ]);
 
                     allRegions.forEach(region => {
@@ -245,8 +252,6 @@ export default function Dashboard() {
                         const prodArr = extractSeriesArray(prodRes?.[region]);
                         const renewableArr = extractAmSeriesArray(renewableRes?.[region]);
 
-
-                        // Strict iterability check mirrors the Land Use pattern
                         const safeProduction = Array.isArray(prodArr) ? prodArr : [];
                         const safeRenewable = Array.isArray(renewableArr) ? renewableArr : [];
 
@@ -353,18 +358,15 @@ export default function Dashboard() {
 
         // Safe Hybrid Injection
         if (hasAmData) {
-            const requiredInfrastructures = [
-                'Onshore Wind',
-                'Utility Solar PV',
-                'Human-induced regeneration (Beef)',
-                'Human-induced regeneration (Sheep)',
-                'Savanna Burning',
-                'Environmental Plantings'
-            ];
-
-            requiredInfrastructures.forEach(infra => {
-                if (!filtered.includes(infra)) {
-                    filtered.push(infra);
+            // Use the global whitelist but keep the first-letter capitalized for the UI if desired, 
+            // though our interceptor is now case-insensitive.
+            VRE_INFRASTRUCTURE_LIST.forEach(infra => {
+                // Find a match case-insensitively in the current filtered list
+                const alreadyExists = filtered.some((f: string) => f.toLowerCase() === infra.toLowerCase());
+                if (!alreadyExists) {
+                    // Capitalize first letter for UI consistency if it's missing
+                    const uiName = infra.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+                    filtered.push(uiName);
                 }
             });
         }
@@ -409,14 +411,55 @@ export default function Dashboard() {
     };
 
     // Data Interceptor: Silently route primary dropdown infrastructural selections to the _Am pipelines.
-    const isInfrastructureMain = [
-        'Onshore Wind', 'Utility Solar PV', 
-        'Human-induced regeneration (Beef)', 'Human-induced regeneration (Sheep)', 
-        'Savanna Burning', 'Environmental Plantings'
-    ].includes(selectedLandUse);
+    // Use lowerecase whitelist from constants for case-insensitive matching
+    const isInfrastructureMain = selectedLandUse
+        ? VRE_INFRASTRUCTURE_LIST.includes(selectedLandUse.toLowerCase())
+        : false;
 
     const activeSubCat = isInfrastructureMain ? 'ALL' : selectedLandUse;
     const activeAgMgmt = isInfrastructureMain ? selectedLandUse : selectedAgManagement;
+
+    // Independent Proxy Parsing - Evaluates strictly over native Area_Am keys to guarantee NRM captures
+    const computedProxyDict = useMemo(() => {
+        if (!mapProxyData || mapProxyData.length === 0 || !isInfrastructureMain || primaryMetric !== 'Production') return null;
+
+        const proxyDict: Record<string, number> = {};
+        const areaAmPayload = mapProxyData[0];
+
+        if (!areaAmPayload) return null;
+
+        Object.keys(areaAmPayload).forEach(regionKey => {
+            if (regionKey === 'metadata' || regionKey === 'default') return;
+            const regionData = areaAmPayload[regionKey];
+            if (!regionData || typeof regionData !== 'object') return;
+
+            // 1. Traverse to the aggregate array
+            if (!regionData['ALL'] || !regionData['ALL']['ALL']) {
+                return; // Skip if missing
+            }
+
+            const dataArray = regionData['ALL']['ALL'];
+
+            // 2. Find the exact VRE series (case-insensitive match)
+            const targetSeries = dataArray.find((series: any) =>
+                series.name && series.name.toLowerCase() === (activeAgMgmt || '').toLowerCase()
+            );
+
+            if (!targetSeries || !targetSeries.data) return;
+
+            // 3. Extract the year value
+            const yearData = targetSeries.data.find((d: any[]) => Number(d[0]) === Number(selectedYear));
+
+            // 4. Assign to dictionary
+            if (yearData && yearData[1] !== undefined && Number(yearData[1]) > 0) {
+                proxyDict[regionKey.trim().toLowerCase()] = Number(yearData[1]);
+            }
+        });
+
+        return [proxyDict];
+    }, [mapProxyData, isInfrastructureMain, primaryMetric, selectedYear, activeAgMgmt]);
+
+    const isVRE = primaryMetric === 'Production' && VRE_INFRASTRUCTURE_LIST.includes((activeAgMgmt || '').toLowerCase());
 
     return (
         <div className="flex flex-row w-screen h-screen overflow-hidden bg-slate-50 font-sans text-slate-900">
@@ -425,6 +468,7 @@ export default function Dashboard() {
                 <MapHub
                     geoData={geoData}
                     analyticalData={analyticalData}
+                    mapProxyData={computedProxyDict} // Pass decoupled, perfectly filtered proxy keys
                     primaryMetric={primaryMetric}
                     selectedSubCategory={activeSubCat}
                     selectedYear={selectedYear}
@@ -433,6 +477,7 @@ export default function Dashboard() {
                     showChoropleth={showChoropleth}
                     choroplethMode={choroplethMode}
                     selectedAgManagement={activeAgMgmt}
+                    isVREMode={isVRE}
                 />
             </div>
 
@@ -660,6 +705,7 @@ export default function Dashboard() {
                                     selectedSubCategory={activeSubCat}
                                     selectedAgManagement={activeAgMgmt}
                                     primaryMetric={primaryMetric}
+                                    isVREMode={isVRE}
                                     title={`National ${primaryMetric} Projections`}
                                 />
                             </div>
@@ -670,6 +716,7 @@ export default function Dashboard() {
                                     selectedSubCategory={activeSubCat}
                                     selectedAgManagement={activeAgMgmt}
                                     primaryMetric={primaryMetric}
+                                    isVREMode={isVRE}
                                     title={`Regional ${primaryMetric} Performance`}
                                 />
                             </div>

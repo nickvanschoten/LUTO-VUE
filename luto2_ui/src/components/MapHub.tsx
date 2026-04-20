@@ -7,6 +7,9 @@ import { BitmapLayer } from '@deck.gl/layers';
 import { Map as MapGL } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import useDashboardStore from '@/store/useDashboardStore';
+import { Download, Map as MapIcon } from 'lucide-react';
+import { exportChoroplethToCSV } from '../utils/exportUtils';
+import { VRE_INFRASTRUCTURE_LIST, EXCLUDED_MAP_REGIONS, NRM_TO_STATE_MAP } from '@/utils/constants';
 
 const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 const INITIAL_VIEW_STATE = { longitude: 133.7751, latitude: -25.2744, zoom: 4.5, pitch: 0, bearing: 0 };
@@ -17,6 +20,7 @@ const AUSTRALIA_BOUNDS: [number, number, number, number] = [112.925, -43.665, 15
 interface Props {
     geoData?: any;
     analyticalData: any[];
+    mapProxyData?: any[] | null;
     primaryMetric: string;
     selectedSubCategory?: string;
     selectedYear?: number;
@@ -25,11 +29,17 @@ interface Props {
     showChoropleth?: boolean;
     choroplethMode?: 'total' | 'density';
     selectedAgManagement?: string;
+    isVREMode?: boolean;
 }
 
 // Compact number formatter for the legend
-function fmtNum(n: number): string {
+function fmtNum(n: number, isVRE: boolean = false): string {
     const abs = Math.abs(n);
+    if (isVRE) {
+        if (abs >= 1000000) return (n / 1000000).toFixed(0) + ' TWh';
+        if (abs >= 1000) return (n / 1000).toFixed(0) + ' GWh';
+        return n.toFixed(0) + ' MWh';
+    }
     if (abs >= 1e9) return (n / 1e9).toFixed(1) + 'B';
     if (abs >= 1e6) return (n / 1e6).toFixed(1) + 'M';
     if (abs >= 1e3) return (n / 1e3).toFixed(1) + 'k';
@@ -39,6 +49,7 @@ function fmtNum(n: number): string {
 const MapHub = ({
     geoData,
     analyticalData = [],
+    mapProxyData = null,
     primaryMetric = '',
     selectedSubCategory = 'ALL',
     selectedYear = 2050,
@@ -47,6 +58,7 @@ const MapHub = ({
     showChoropleth = true,
     choroplethMode = 'total',
     selectedAgManagement = 'ALL',
+    isVREMode = false,
 }: Props) => {
     const { selectedRegionIds, setSelectedRegionIds, areaDict, selectedScenario } = useDashboardStore();
 
@@ -123,8 +135,15 @@ const MapHub = ({
 
         const fetchDataRaster = async () => {
             try {
+                // Determine the correct parent metric to send to the backend.
+                // Apply the exact same VRE interceptor logic so we don't blindly request 'Production' or 'Land Use'
+                const targetFilter = (selectedAgManagement && selectedAgManagement !== 'ALL') ? selectedAgManagement : selectedSubCategory;
+                const isInfra = VRE_INFRASTRUCTURE_LIST.includes(targetFilter.toLowerCase());
+
+                const finalMetric = isInfra ? 'Renewable Energy' : primaryMetric;
+
                 const params = new URLSearchParams({
-                    metric: primaryMetric,
+                    metric: finalMetric,
                     parentCat: selectedSubCategory === 'ALL' ? 'ALL' : selectedSubCategory,
                     subCat: selectedAgManagement !== 'ALL' ? selectedAgManagement : 'ALL',
                     year: String(selectedYear),
@@ -240,6 +259,98 @@ const MapHub = ({
         const dict: Record<string, number> = {};
         let min = Infinity;
         let max = -Infinity;
+        const targetFilter = (selectedAgManagement && selectedAgManagement !== 'ALL')
+            ? selectedAgManagement
+            : selectedSubCategory;
+        const isVRE = VRE_INFRASTRUCTURE_LIST.includes(targetFilter.toLowerCase());
+        const isProxyMode = primaryMetric === 'Production' && isVRE && !!(mapProxyData && mapProxyData.length > 0);
+
+        // --- Spatial Downscaling Engine (VRE Production Override) ---
+        if (isProxyMode) {
+            // Step A: Calculate Total State Land Use
+            const stateLandUseTotals: Record<string, number> = {};
+            const nrmLandUseDict: Record<string, number> = {};
+            const proxyBlob = mapProxyData![0];
+
+            if (proxyBlob) {
+                Object.keys(proxyBlob).forEach(regionKey => {
+                    const safeRegion = regionKey.trim().toLowerCase();
+                    if (EXCLUDED_MAP_REGIONS.includes(safeRegion)) return;
+
+                    const stateName = NRM_TO_STATE_MAP[safeRegion];
+                    if (!stateName) return; // Skip unmapped regions
+
+                    const val = proxyBlob[regionKey];
+                    if (typeof val === 'number' && !isNaN(val)) {
+                        nrmLandUseDict[safeRegion] = val;
+                        stateLandUseTotals[stateName] = (stateLandUseTotals[stateName] || 0) + val;
+                    }
+                });
+            }
+
+            // Step B: Extract State Production Totals
+            const stateProdTotals: Record<string, number> = {};
+            const prodBlob = analyticalData[0];
+            if (prodBlob) {
+                Object.keys(prodBlob).forEach(regionKey => {
+                    const safeRegion = regionKey.trim().toLowerCase();
+                    if (EXCLUDED_MAP_REGIONS.includes(safeRegion) && safeRegion !== 'australia' && safeRegion !== 'other territories') {
+                        const rawSeries: any[] = Array.isArray(prodBlob[regionKey]) ? prodBlob[regionKey] : [];
+                        const matchedSeries = rawSeries.filter((s: any) => {
+                            if (s.name && s.name.toLowerCase() === targetFilter.toLowerCase()) return true;
+                            if (s._agManagement && s._agManagement.toLowerCase() === targetFilter.toLowerCase()) return true;
+                            return false;
+                        });
+
+                        let val = NaN;
+                        matchedSeries.forEach(s => {
+                            if (s && Array.isArray(s.data)) {
+                                const dataPoint = s.data.find((p: any) => Number(p[0]) === Number(selectedYear));
+                                if (dataPoint) val = (isNaN(val) ? 0 : val) + Number(dataPoint[1]);
+                            }
+                        });
+                        if (!isNaN(val)) stateProdTotals[safeRegion] = val;
+                    }
+                });
+            }
+
+            // Step C & D: Apply Downscaling Formula
+            Object.keys(nrmLandUseDict).forEach(nrmRegion => {
+                const state = NRM_TO_STATE_MAP[nrmRegion];
+                const nrmLandUse = nrmLandUseDict[nrmRegion] || 0;
+                const totalStateLandUse = stateLandUseTotals[state] || 0;
+                const stateProd = stateProdTotals[state];
+
+                let estimatedProd = 0;
+                if (totalStateLandUse > 0 && stateProd !== undefined && !isNaN(stateProd)) {
+                    estimatedProd = (nrmLandUse / totalStateLandUse) * stateProd;
+                }
+
+                if (state === 'victoria') {
+                    console.log(`DOWNSCALE TRACE [${nrmRegion}]:`, {
+                        nrmLand: nrmLandUse,
+                        stateLandTotal: totalStateLandUse,
+                        stateProdTotal: stateProd,
+                        calculatedProd: estimatedProd
+                    });
+                }
+
+                // Final assignment with density modifier support
+                let finalVal = estimatedProd;
+                if (choroplethMode === 'density') {
+                    const area = areaDict[nrmRegion] || 1;
+                    finalVal = finalVal / area;
+                }
+
+                dict[nrmRegion] = finalVal;
+                min = Math.min(min, finalVal);
+                max = Math.max(max, finalVal);
+            });
+
+            return { dataDict: dict, minVal: min === Infinity ? 0 : min, maxVal: max === -Infinity ? 1 : max };
+        }
+        // --- End Spatial Downscaling Engine ---
+
         const blob = Array.isArray(analyticalData) ? analyticalData[0] : analyticalData;
         if (!blob) return { dataDict: dict, minVal: 0, maxVal: 1 };
 
@@ -258,9 +369,10 @@ const MapHub = ({
         }
 
         regionEntries.forEach(({ name: region, data: regionData }) => {
-            if (region === 'AUSTRALIA') return;
-
+            if (!region) return;
             const safeRegion = region.trim().toLowerCase();
+
+            if (EXCLUDED_MAP_REGIONS.includes(safeRegion)) return;
 
             if (!regionData) {
                 dict[safeRegion] = 0; // Graceful fallback for missing regional JSON data
@@ -292,7 +404,7 @@ const MapHub = ({
 
                     // Production Bypass
                     if (primaryMetric === 'Production') {
-                        const isInfra = ['onshore wind', 'utility solar pv', 'human-induced regeneration (beef)', 'human-induced regeneration (sheep)', 'savanna burning', 'environmental plantings'].includes(targetFilter.toLowerCase());
+                        const isInfra = VRE_INFRASTRUCTURE_LIST.includes(targetFilter.toLowerCase());
                         if (isInfra && s._agManagement && s._agManagement.toLowerCase() === targetFilter.toLowerCase()) return true;
                     }
                     return false;
@@ -312,7 +424,8 @@ const MapHub = ({
             let val = NaN;
             seriesToProcess.forEach(s => {
                 if (s && Array.isArray(s.data)) {
-                    const dataPoint = s.data.find((p: any) => p[0] === selectedYear);
+                    // Type-agnostic year matching: Number(p[0]) === Number(selectedYear)
+                    const dataPoint = s.data.find((p: any) => Number(p[0]) === Number(selectedYear));
                     if (dataPoint) {
                         val = (isNaN(val) ? 0 : val) + Number(dataPoint[1]);
                     }
@@ -380,6 +493,7 @@ const MapHub = ({
 
         // 2. GeoJsonLayer (on top)
         if (geoData && showChoropleth) {
+            console.log("CHOROPLETH DICT:", dataDict);
             result.push(new GeoJsonLayer({
                 id: 'nrm-regions-layer',
                 data: geoData,
@@ -452,8 +566,39 @@ const MapHub = ({
         return result;
     }, [geoData, showChoropleth, showBaseMap, rasterBaseOverlayUrl, rasterBaseBounds, showDataPoints, rasterDataOverlayUrl, rasterDataBounds, dataDict, minVal, maxVal, selectedRegionIds, setSelectedRegionIds]);
 
+    const handleGeoTIFFDownload = () => {
+        if (!selectedScenario) return;
+        const params = new URLSearchParams({
+            scenario: selectedScenario,
+            metric: primaryMetric,
+            parentCat: selectedSubCategory === 'ALL' ? 'ALL' : selectedSubCategory,
+            subCat: selectedAgManagement !== 'ALL' ? selectedAgManagement : 'ALL',
+            year: String(selectedYear),
+        });
+        window.location.href = `http://127.0.0.1:8000/api/v1/export/geotiff?${params.toString()}`;
+    };
+
     return (
-        <div className="relative w-full h-full min-h-0 bg-slate-900 border-none overflow-hidden">
+        <div className="relative w-full h-full min-h-0 bg-slate-900 border-none overflow-hidden group">
+            {/* Export Actions */}
+            <div className="absolute top-4 right-4 z-10 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                    onClick={() => exportChoroplethToCSV(dataDict, selectedYear, `LUTO_Regional_${primaryMetric}`)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-[#00E261] rounded shadow border border-slate-700 transition-colors"
+                    title="Download Choropleth Data (CSV)"
+                >
+                    <Download size={14} />
+                    <span className="text-[10px] font-bold uppercase tracking-wider">CSV</span>
+                </button>
+                <button
+                    onClick={handleGeoTIFFDownload}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-[#00E261] rounded shadow border border-slate-700 transition-colors"
+                    title="Download Cell-Level GeoTIFF"
+                >
+                    <MapIcon size={14} />
+                    <span className="text-[10px] font-bold uppercase tracking-wider">TIFF</span>
+                </button>
+            </div>
 
             {/* Choropleth Legend */}
             {hasData && (
@@ -466,9 +611,9 @@ const MapHub = ({
                         style={{ background: 'linear-gradient(to right, rgb(255,80,80), rgb(80,80,80), rgb(80,255,80))' }}
                     />
                     <div className="flex justify-between text-[9px] font-bold text-slate-300">
-                        <span>{fmtNum(minVal)}</span>
+                        <span>{fmtNum(minVal, isVREMode)}</span>
                         <span className="text-slate-500">0</span>
-                        <span>{fmtNum(maxVal)}</span>
+                        <span>{fmtNum(maxVal, isVREMode)}</span>
                     </div>
                 </div>
             )}
@@ -513,11 +658,24 @@ const MapHub = ({
                     const area = areaDict[regionName];
                     const displayArea = area ? `${area.toFixed(0)} km²` : 'Unknown Area';
 
-                    const formattedVal = Math.abs(val) >= 1e6
-                        ? (val / 1e6).toFixed(2) + 'M'
-                        : Math.abs(val) >= 1e3
-                            ? (val / 1e3).toFixed(2) + 'k'
-                            : val.toFixed(2);
+                    let formattedVal = '';
+                    if (isVREMode) {
+                        const absVal = Math.abs(val);
+                        if (absVal >= 1000000) {
+                            formattedVal = (val / 1000000).toFixed(2) + ' TWh';
+                        } else if (absVal >= 1000) {
+                            formattedVal = (val / 1000).toFixed(2) + ' GWh';
+                        } else {
+                            formattedVal = val.toLocaleString() + ' MWh';
+                        }
+                    } else {
+                        formattedVal = Math.abs(val) >= 1e6
+                            ? (val / 1e6).toFixed(2) + 'M'
+                            : Math.abs(val) >= 1e3
+                                ? (val / 1e3).toFixed(2) + 'k'
+                                : val.toFixed(2);
+                    }
+
                     return `${rawName}\nValue: ${formattedVal} ${choroplethMode === 'density' ? '/ km²' : ''}\nArea: ${displayArea}`.trim();
                 }}
             >

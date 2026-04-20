@@ -3,6 +3,8 @@
 import React, { useMemo } from 'react';
 import Highcharts from 'highcharts';
 import HighchartsReact from 'highcharts-react-official';
+import { Download } from 'lucide-react';
+import { exportChartToCSV } from '../utils/exportUtils';
 
 interface Props {
     analyticalData: any[];
@@ -11,6 +13,7 @@ interface Props {
     selectedAgManagement: string;
     primaryMetric?: string;
     title?: string;
+    isVREMode?: boolean;
 }
 
 const COMMODITY_GROUPS: Record<string, string> = {
@@ -21,7 +24,7 @@ const COMMODITY_GROUPS: Record<string, string> = {
     'Beef - modified land': 'Livestock', 'Sheep - modified land': 'Livestock', 'Dairy - modified land': 'Livestock', 'Beef - natural land': 'Livestock', 'Sheep - natural land': 'Livestock', 'Dairy - natural land': 'Livestock'
 };
 
-const TimeSeriesStackedChart = ({ analyticalData, targetRegions, selectedSubCategory, selectedAgManagement, primaryMetric, title }: Props) => {
+const TimeSeriesStackedChart = ({ analyticalData, targetRegions, selectedSubCategory, selectedAgManagement, primaryMetric, title, isVREMode }: Props) => {
     const chartSeries = useMemo(() => {
         if (!analyticalData || analyticalData.length === 0 || !targetRegions || targetRegions.length === 0) return [];
         try {
@@ -53,7 +56,7 @@ const TimeSeriesStackedChart = ({ analyticalData, targetRegions, selectedSubCate
                         'onshore wind', 'utility solar pv', 'human-induced regeneration (beef)',
                         'human-induced regeneration (sheep)', 'savanna burning', 'environmental plantings'
                     ].includes((selectedAgManagement || '').toLowerCase());
-                    
+
                     if (primaryMetric === 'Production' && isInfrastructureMain && s._agManagement && s._agManagement.toLowerCase() === (selectedAgManagement || '').toLowerCase()) {
                         return true; // Render the aggregated renewable production commodities
                     }
@@ -95,7 +98,7 @@ const TimeSeriesStackedChart = ({ analyticalData, targetRegions, selectedSubCate
             });
 
             // 4. Series Overrides: Pivot non-additive metrics to line charts
-            const OVERRIDE_LIST = ['profit', 'target', 'existing capacity', 'net revenue', 'total cost', 'emissions target'];
+            const OVERRIDE_LIST = ['profit', 'target', 'net revenue', 'total cost', 'emissions target'];
 
             return Object.values(groupedSeriesObj).map((s: any) => {
                 const isOverride = OVERRIDE_LIST.includes(s.name.toLowerCase());
@@ -154,6 +157,12 @@ const TimeSeriesStackedChart = ({ analyticalData, targetRegions, selectedSubCate
             labels: {
                 style: { color: '#94a3b8' },
                 formatter: function () {
+                    if (isVREMode) {
+                        const val = Number(this.value);
+                        if (Math.abs(val) >= 1000000) return (val / 1000000).toFixed(0) + ' TWh';
+                        if (Math.abs(val) >= 1000) return (val / 1000).toFixed(0) + ' GWh';
+                        return val + ' MWh';
+                    }
                     let val = Math.abs(this.value as number);
                     if (val >= 1e9) return ((this.value as number) / 1e9).toFixed(1) + 'B';
                     if (val >= 1e6) return ((this.value as number) / 1e6).toFixed(1) + 'M';
@@ -165,6 +174,16 @@ const TimeSeriesStackedChart = ({ analyticalData, targetRegions, selectedSubCate
         tooltip: {
             shared: true,
             pointFormatter: function () {
+                if (isVREMode) {
+                    const val = Number(this.y);
+                    let formattedVal = val.toLocaleString() + ' MWh';
+                    if (Math.abs(val) >= 1000000) {
+                        formattedVal = (val / 1000000).toFixed(2) + ' TWh';
+                    } else if (Math.abs(val) >= 1000) {
+                        formattedVal = (val / 1000).toFixed(2) + ' GWh';
+                    }
+                    return `<span style="color:${this.color}">\u25CF</span> ${this.series.name}: <b>${formattedVal}</b><br/>`;
+                }
                 let val = Math.abs(this.y as number);
                 let formatted = val.toFixed(2);
                 let suffix = '';
@@ -188,12 +207,19 @@ const TimeSeriesStackedChart = ({ analyticalData, targetRegions, selectedSubCate
     }
 
     return (
-        <div className="absolute inset-0 w-full h-full">
+        <div className="absolute inset-0 w-full h-full relative group">
             <HighchartsReact
                 highcharts={Highcharts}
                 options={options}
                 containerProps={{ className: 'w-full h-full' }}
             />
+            <button
+                onClick={() => exportChartToCSV(chartSeries, title || 'Time Series Data')}
+                className="absolute top-3 right-4 p-1.5 bg-white/80 hover:bg-slate-100 text-slate-400 hover:text-[#00E261] rounded shadow-sm border border-slate-200 opacity-0 group-hover:opacity-100 transition-all z-10"
+                title="Download Data (CSV)"
+            >
+                <Download size={14} />
+            </button>
         </div>
     );
 };

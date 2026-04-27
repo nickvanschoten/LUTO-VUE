@@ -95,6 +95,7 @@ export default function Dashboard() {
         showBaseMap, setShowBaseMap,
         showDataPoints, setShowDataPoints,
         showChoropleth, setShowChoropleth,
+        showRezLayer, setShowRezLayer,
         choroplethMode, setChoroplethMode,
         selectedAgManagement, setSelectedAgManagement,
         areaDict, setAreaDict,
@@ -679,6 +680,40 @@ export default function Dashboard() {
                                     Show Point Data Overlay
                                 </span>
                             </label>
+                        </div>
+
+                        {/* REZ Layer Toggle */}
+                        <div className="pb-1">
+                            <label className="flex items-center gap-2.5 cursor-pointer group">
+                                <div className="relative">
+                                    <input
+                                        id="toggle-rez-layer"
+                                        type="checkbox"
+                                        className="sr-only"
+                                        checked={showRezLayer}
+                                        onChange={(e) => setShowRezLayer(e.target.checked)}
+                                    />
+                                    <div className={`w-8 h-4 rounded-full transition-colors duration-200 ${showRezLayer ? 'bg-amber-400' : 'bg-slate-300'}`} />
+                                    <div className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform duration-200 ${showRezLayer ? 'translate-x-4' : 'translate-x-0'}`} />
+                                </div>
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 group-hover:text-amber-600 transition-colors">
+                                    Show Renewable Energy Zones
+                                </span>
+                            </label>
+                            {showRezLayer && (
+                                <div className="ml-10 mt-1.5 flex flex-col gap-1">
+                                    {[
+                                        { label: 'Solar', color: '#fbbf24' },
+                                        { label: 'Wind', color: '#34d399' },
+                                        { label: 'Mixed / Other', color: '#a78bfa' },
+                                    ].map(({ label, color }) => (
+                                        <div key={label} className="flex items-center gap-1.5">
+                                            <div className="w-2.5 h-2.5 rounded-sm border" style={{ backgroundColor: color + '60', borderColor: color }} />
+                                            <span className="text-[9px] text-slate-500">{label}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>

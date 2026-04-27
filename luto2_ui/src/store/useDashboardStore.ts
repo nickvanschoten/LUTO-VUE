@@ -17,6 +17,7 @@ interface DashboardState {
     showBaseMap: boolean;
     showDataPoints: boolean;
     showChoropleth: boolean;
+    showRezLayer: boolean;
     choroplethMode: 'total' | 'density';
     selectedAgManagement: string;
     areaDict: Record<string, number>;
@@ -35,6 +36,7 @@ interface DashboardState {
     setShowBaseMap: (val: boolean) => void;
     setShowDataPoints: (val: boolean) => void;
     setShowChoropleth: (val: boolean) => void;
+    setShowRezLayer: (val: boolean) => void;
     setChoroplethMode: (mode: 'total' | 'density') => void;
     setSelectedAgManagement: (val: string) => void;
     setAreaDict: (dict: Record<string, number>) => void;
@@ -55,6 +57,7 @@ const useDashboardStore = create<DashboardState>((set) => ({
     showBaseMap: false,
     showDataPoints: false,
     showChoropleth: true,
+    showRezLayer: false,
     choroplethMode: 'total',
     selectedAgManagement: 'ALL',
     areaDict: {},
@@ -77,6 +80,7 @@ const useDashboardStore = create<DashboardState>((set) => ({
     setShowBaseMap: (val) => set({ showBaseMap: val }),
     setShowDataPoints: (val) => set({ showDataPoints: val }),
     setShowChoropleth: (val) => set({ showChoropleth: val }),
+    setShowRezLayer: (val) => set({ showRezLayer: val }),
     setChoroplethMode: (mode) => set({ choroplethMode: mode }),
     setSelectedAgManagement: (val) => set({ selectedAgManagement: val }),
     setAreaDict: (dict) => set({ areaDict: dict }),

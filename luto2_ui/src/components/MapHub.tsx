@@ -60,7 +60,10 @@ const MapHub = ({
     selectedAgManagement = 'ALL',
     isVREMode = false,
 }: Props) => {
-    const { selectedRegionIds, setSelectedRegionIds, areaDict, selectedScenario } = useDashboardStore();
+    const { selectedRegionIds, setSelectedRegionIds, areaDict, selectedScenario, showRezLayer } = useDashboardStore();
+
+    // REZ polygon data — fetched once from /public/ when toggled on
+    const [rezGeoData, setRezGeoData] = useState<any>(null);
 
     // Raster overlay states
     const [rasterBaseImgStr, setRasterBaseImgStr] = useState<string | null>(null);
@@ -70,6 +73,15 @@ const MapHub = ({
     const [rasterDataImgStr, setRasterDataImgStr] = useState<string | null>(null);
     const [rasterDataBounds, setRasterDataBounds] = useState<[number, number, number, number]>(AUSTRALIA_BOUNDS);
     const [rasterDataOverlayUrl, setRasterDataOverlayUrl] = useState<string | null>(null);
+
+    // ── REZ Data Fetch ───────────────────────────────────────────────────────
+    useEffect(() => {
+        if (!showRezLayer || rezGeoData) return; // Only fetch once; skip when toggled off
+        fetch('/rez_polygons.geojson')
+            .then(r => r.json())
+            .then(data => setRezGeoData(data))
+            .catch(err => console.warn('[MapHub] REZ fetch failed:', err));
+    }, [showRezLayer]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ── Base Raster Fetch ───────────────────────────
     useEffect(() => {
@@ -491,7 +503,41 @@ const MapHub = ({
             }));
         }
 
-        // 2. GeoJsonLayer (on top)
+        // 3. REZ polygon overlay — above rasters, below choropleth
+        if (showRezLayer && rezGeoData) {
+            // REZType colour map: 1 = Solar, 2 = Wind, 3 = Mixed/Other (assumption)
+            // Amber/gold palette suits energy-sector branding against the dark base map
+            const rezTypeColor: Record<number, [number, number, number]> = {
+                1: [251, 191, 36],   // amber-400  — Solar
+                2: [52,  211, 153],  // emerald-400 — Wind
+                3: [167, 139, 250],  // violet-400  — Mixed
+            };
+            result.push(new GeoJsonLayer({
+                id: 'rez-polygons-layer',
+                data: rezGeoData,
+                pickable: true,
+                stroked: true,
+                filled: true,
+                lineWidthMinPixels: 2,
+                getFillColor: (f: any) => {
+                    const type = f.properties?.REZType ?? 0;
+                    const [r, g, b] = rezTypeColor[type] ?? [234, 179, 8]; // yellow-500 fallback
+                    return [r, g, b, 60]; // Semi-transparent fill
+                },
+                getLineColor: (f: any) => {
+                    const type = f.properties?.REZType ?? 0;
+                    const [r, g, b] = rezTypeColor[type] ?? [234, 179, 8];
+                    return [r, g, b, 220]; // Solid border
+                },
+                getLineWidth: 2500,
+                updateTriggers: {
+                    getFillColor: [showRezLayer],
+                    getLineColor: [showRezLayer],
+                },
+            }));
+        }
+
+        // 4. NRM GeoJsonLayer (on top)
         if (geoData && showChoropleth) {
             console.log("CHOROPLETH DICT:", dataDict);
             result.push(new GeoJsonLayer({
@@ -564,7 +610,7 @@ const MapHub = ({
         }
 
         return result;
-    }, [geoData, showChoropleth, showBaseMap, rasterBaseOverlayUrl, rasterBaseBounds, showDataPoints, rasterDataOverlayUrl, rasterDataBounds, dataDict, minVal, maxVal, selectedRegionIds, setSelectedRegionIds]);
+    }, [geoData, showChoropleth, showBaseMap, rasterBaseOverlayUrl, rasterBaseBounds, showDataPoints, rasterDataOverlayUrl, rasterDataBounds, dataDict, minVal, maxVal, selectedRegionIds, setSelectedRegionIds, showRezLayer, rezGeoData]);
 
     const handleGeoTIFFDownload = () => {
         if (!selectedScenario) return;
@@ -648,7 +694,31 @@ const MapHub = ({
                 layers={layers}
                 getTooltip={({ object }: any) => {
                     if (!object?.properties) return null;
+
+                    // ── REZ tooltip ──────────────────────────────────────────
+                    if (object.properties.REZName !== undefined) {
+                        const rezTypeLabel: Record<number, string> = {
+                            1: 'Solar',
+                            2: 'Wind',
+                            3: 'Mixed / Other',
+                        };
+                        const typeName = object.properties.REZType
+                            ? rezTypeLabel[object.properties.REZType] ?? `Type ${object.properties.REZType}`
+                            : 'Renewable Energy Zone';
+                        const stateLabel = object.properties.state ?? '';
+                        return {
+                            html: `<div style="font-size:11px;line-height:1.6">
+                                <strong>${object.properties.REZName}</strong>
+                                ${stateLabel ? `<span style="margin-left:6px;font-size:9px;opacity:0.7">${stateLabel}</span>` : ''}
+                                <br/>${typeName}
+                              </div>`,
+                            style: { background: '#0f172a', color: '#fbbf24', border: '1px solid #fbbf24', borderRadius: '4px', padding: '6px 10px' },
+                        };
+                    }
+
+                    // ── NRM choropleth tooltip ────────────────────────────────
                     const rawName = object.properties.NRM_REGION;
+                    if (!rawName) return null;
                     const regionName = rawName ? rawName.trim().toLowerCase() : '';
                     const val = dataDict[regionName];
                     if (val === undefined) {

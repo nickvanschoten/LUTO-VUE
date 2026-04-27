@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "build:portable": "node build-portable.js"
   },
   "dependencies": {
     "@deck.gl/core": "^8.9.33",
